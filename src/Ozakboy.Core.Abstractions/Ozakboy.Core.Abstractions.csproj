@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>Ozakboy.Core.Abstractions</PackageId>
+    <AssemblyName>Ozakboy.Core.Abstractions</AssemblyName>
+    <RootNamespace>Ozakboy.Core.Abstractions</RootNamespace>
+
+    <Title>Ozakboy.Core.Abstractions — 交易系統共用基礎型別</Title>
+    <Description>零相依的 .NET 基礎型別:Result/Result&lt;T&gt; 明確結果型別(不以例外表達預期失敗)、Money 帶幣別的金額值型別(防止不同幣別誤加)、Precision 十進位步進值對齊(交易所 tickSize/stepSize 校正)、RetryPolicy 重試策略描述與退避間隔計算。全部以 decimal 運算,不使用 double/float。Zero-dependency .NET building blocks for trading systems: explicit Result types, currency-aware Money, decimal step alignment, and retry policy descriptors.</Description>
+    <PackageTags>ozakboy;result;result-type;railway-oriented;money;currency;decimal;precision;rounding;step-size;tick-size;retry;backoff;exponential-backoff;trading;zero-dependency;dotnet;csharp</PackageTags>
+
+    <PackageProjectUrl>https://github.com/ozakboy/Ozakboy.Core.Abstractions</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/ozakboy/Ozakboy.Core.Abstractions</RepositoryUrl>
+
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\LICENSE" Pack="true" PackagePath="\" />
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <!--
+    刻意不引用 Microsoft.SourceLink.GitHub 套件。
+    自 .NET 8 起 SourceLink 已內建於 SDK,只要設定 PublishRepositoryUrl 與 EmbedUntrackedSources
+    (見 Directory.Build.props)即可產生原始碼連結;外掛套件反而會帶進額外的相依鏈。
+    本套件因此維持零 NuGet 相依。
+  -->
+
+</Project>
