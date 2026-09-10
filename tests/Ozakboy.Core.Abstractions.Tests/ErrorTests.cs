@@ -255,6 +255,63 @@ public sealed class ErrorTests
         Assert.IsNull(original.Exception);
     }
 
+    [TestMethod]
+    public void DataDefaultsToNull()
+    {
+        var error = new Error("qty.too_small", "數量太小");
+
+        Assert.IsNull(error.Data);
+    }
+
+    [TestMethod]
+    public void WithExpressionCanSetDataAndReadItBack()
+    {
+        var original = new Error("qty.too_small", "數量太小", ErrorCategory.Validation);
+        var data = new Dictionary<string, string>
+        {
+            ["actual"] = "0.0005",
+            ["minimum"] = "0.001",
+        };
+
+        var enriched = original with { Data = data };
+
+        Assert.IsNull(original.Data);
+        Assert.IsNotNull(enriched.Data);
+        Assert.AreEqual("0.0005", enriched.Data["actual"]);
+        Assert.AreEqual("0.001", enriched.Data["minimum"]);
+    }
+
+    [TestMethod]
+    public void EqualityIgnoresData()
+    {
+        // 與 Exception 的處理一致:Data 只供診斷,不參與相等性比較。
+        // 這裡涵蓋兩種情境:一邊有 Data 一邊沒有,以及兩邊都有但內容不同。
+        var withoutData = new Error("qty.too_small", "數量太小", ErrorCategory.Validation);
+        var withData = withoutData with
+        {
+            Data = new Dictionary<string, string> { ["actual"] = "0.0005" },
+        };
+        var withDifferentData = withoutData with
+        {
+            Data = new Dictionary<string, string> { ["actual"] = "0.0009" },
+        };
+
+        Assert.AreEqual(withoutData, withData);
+        Assert.AreEqual(withData, withDifferentData);
+    }
+
+    [TestMethod]
+    public void GetHashCodeIgnoresData()
+    {
+        var withoutData = new Error("qty.too_small", "數量太小", ErrorCategory.Validation);
+        var withData = withoutData with
+        {
+            Data = new Dictionary<string, string> { ["actual"] = "0.0005" },
+        };
+
+        Assert.AreEqual(withoutData.GetHashCode(), withData.GetHashCode());
+    }
+
     /// <summary>
     /// 測試用的例外型別,避免相依於任何實際的傳輸層例外。
     /// </summary>

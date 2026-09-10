@@ -75,6 +75,21 @@ public sealed record Error
     public Exception? Exception { get; init; }
 
     /// <summary>
+    /// 與這次失敗有關的結構化資料(若有)。不參與相等性比較。
+    /// Structured data related to this failure, if any. Does not take part in equality.
+    /// </summary>
+    /// <remarks>
+    /// 用途是讓上層不必從訊息字串裡剖析數值。例如「數量低於最小下單量」除了給人看的訊息之外,
+    /// 還可以附上實際數量與最小值,讓上層能直接決定要不要補到最小值,而不是用正規表示式去撈。
+    /// 訊息是給人看的,會隨時被改寫;要被程式讀的東西應該放在這裡。
+    /// This spares callers from parsing numbers back out of the message. A "quantity below minimum" failure can
+    /// carry the actual quantity and the minimum alongside the human-readable text, so the caller can decide
+    /// whether to round up without running a regular expression over the message. Messages are for people and get
+    /// rewritten; anything a program needs to read belongs here.
+    /// </remarks>
+    public IReadOnlyDictionary<string, string>? Data { get; init; }
+
+    /// <summary>
     /// 這次失敗是否為暫時性(值得在退避後重試)。
     /// Whether this failure is transient and worth retrying after a backoff.
     /// </summary>

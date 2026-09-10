@@ -202,6 +202,44 @@ public readonly struct Result<T> : IEquatable<Result<T>>
     public Result ToResult() => IsFailure ? Result.Failure(Error) : Result.Success();
 
     /// <summary>
+    /// 把失敗原樣轉發成另一種回傳值型別的失敗結果。
+    /// Forwards this failure unchanged as a failed result of a different value type.
+    /// </summary>
+    /// <typeparam name="TOut">目標回傳值型別。The target value type.</typeparam>
+    /// <returns>帶著同一個錯誤的失敗結果。A failed result carrying the same error.</returns>
+    /// <remarks>
+    /// 用於「內層操作失敗,外層要用不同的型別把同一個錯誤往上傳」的情境:
+    /// <code>
+    /// var quantity = NormalizeQuantity(raw);
+    /// if (quantity.IsFailure)
+    /// {
+    ///     return quantity.ToFailure&lt;OrderRequest&gt;();
+    /// }
+    /// </code>
+    /// 沒有這個方法就得寫 <c>Result.Failure&lt;OrderRequest&gt;(quantity.Error!)</c> —— 因為
+    /// <see cref="Error"/> 是可為 null 的屬性,必須加上空值寬恕運算子,而那個 <c>!</c> 在轉發失敗的
+    /// 程式碼裡會出現得非常頻繁,讓「這裡真的檢查過了嗎」變得難以一眼判斷。
+    /// This covers the case where an inner operation fails and the outer scope must propagate the same error under
+    /// a different type. Without it you would write <c>Result.Failure&lt;OrderRequest&gt;(quantity.Error!)</c>: because
+    /// <see cref="Error"/> is nullable, a null-forgiving operator is required, and that <c>!</c> shows up so often in
+    /// forwarding code that it stops being a useful signal of "has this really been checked".
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// 在成功的結果上呼叫時擲出 —— 成功的結果沒有可以轉發的錯誤,這代表呼叫端漏了檢查。
+    /// Thrown when called on a successful result: there is no error to forward, which means the caller skipped a check.
+    /// </exception>
+    public Result<TOut> ToFailure<TOut>()
+    {
+        if (IsSuccess)
+        {
+            throw new InvalidOperationException(
+                "成功的結果沒有可轉發的錯誤。A successful result has no error to forward.");
+        }
+
+        return Result<TOut>.FromError(Error);
+    }
+
+    /// <summary>
     /// 失敗時擲出 <see cref="InvalidOperationException"/>,成功時回傳值。
     /// Throws an <see cref="InvalidOperationException"/> on failure; returns the value on success.
     /// </summary>

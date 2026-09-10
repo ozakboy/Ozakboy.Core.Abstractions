@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-11
+
+Additions driven by the first real consumer of this package. Everything here came from writing an exchange
+abstraction layer on top of `0.1.0` and hitting the same friction repeatedly — no API was removed or changed,
+so this is additive only.
+
+### Added
+
+- `Result.ToFailure<TOut>()` and `Result<T>.ToFailure<TOut>()` — forward an existing failure unchanged as a
+  failed result of a different value type. Without it, propagating an inner failure outward reads as
+  `Result.Failure<Order>(inner.Error!)`: `Error` is nullable, so a null-forgiving operator is required, and that
+  `!` appeared often enough in forwarding code that it stopped being a useful signal of "this was checked".
+  Calling it on a successful result throws, because there is no error to forward and reaching that line means a
+  check was skipped.
+- `ErrorCategory.NotSupported` — the operation is fine, this particular implementation just cannot do it.
+  Distinct from `Validation` (bad input) and from any transient category. The motivating case is an interface
+  with implementations of unequal capability: a simulated exchange used for backtesting cannot change margin
+  mode, and none of the existing categories described that honestly.
+- `Error.Data` — optional structured data alongside the human-readable message, excluded from equality like
+  `Exception`. It spares callers from parsing numbers back out of message strings: a "quantity below minimum"
+  failure can carry the actual quantity and the minimum, so the caller can decide whether to round up without
+  running a regular expression over prose that is going to get rewritten.
+- `Precision.TryFloorToStep`, `TryCeilingToStep`, and `TryRoundToStep` — non-throwing variants that return
+  `false` for an invalid step. Exchange trading rules arrive over the wire and should not be assumed valid;
+  callers that were going to wrap the outcome in a failure value anyway had to guard the step separately first.
+
 ## [0.1.0] - 2026-09-11
 
 First release. The API is still settling, hence the `0.x` version.
@@ -39,5 +65,6 @@ First release. The API is still settling, hence the `0.x` version.
   reference, which keeps the dependency graph empty.
 - Every price, quantity, and monetary amount is `decimal`. Binary floating point is not used anywhere.
 
-[Unreleased]: https://github.com/ozakboy/Ozakboy.Core.Abstractions/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ozakboy/Ozakboy.Core.Abstractions/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/ozakboy/Ozakboy.Core.Abstractions/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ozakboy/Ozakboy.Core.Abstractions/releases/tag/v0.1.0

@@ -176,6 +176,27 @@ public readonly struct Result : IEquatable<Result>
     }
 
     /// <summary>
+    /// 把失敗原樣轉發成帶回傳值型別的失敗結果。
+    /// Forwards this failure unchanged as a failed result that carries a value type.
+    /// </summary>
+    /// <typeparam name="TOut">目標回傳值型別。The target value type.</typeparam>
+    /// <returns>帶著同一個錯誤的失敗結果。A failed result carrying the same error.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// 在成功的結果上呼叫時擲出。
+    /// Thrown when called on a successful result.
+    /// </exception>
+    public Result<TOut> ToFailure<TOut>()
+    {
+        if (IsSuccess)
+        {
+            throw new InvalidOperationException(
+                "成功的結果沒有可轉發的錯誤。A successful result has no error to forward.");
+        }
+
+        return Result<TOut>.FromError(Error);
+    }
+
+    /// <summary>
     /// 將錯誤隱含轉換為失敗的結果,讓 <c>return someError;</c> 可以直接寫。
     /// Implicitly converts an error into a failed result so that <c>return someError;</c> compiles.
     /// </summary>

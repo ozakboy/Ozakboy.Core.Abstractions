@@ -343,4 +343,54 @@ public sealed class ResultTests
     {
         Assert.ThrowsExactly<ArgumentNullException>(() => { _ = Result.Failure<int>(null!); });
     }
+
+    [TestMethod]
+    public void ToFailureForwardsTheSameErrorInstanceToAnotherValueType()
+    {
+        var error = Error.Timeout("http.timeout", "請求逾時");
+        var result = Result.Failure(error);
+
+        var forwarded = result.ToFailure<int>();
+
+        Assert.IsTrue(forwarded.IsFailure);
+        Assert.AreSame(error, forwarded.Error);
+    }
+
+    [TestMethod]
+    public void ToFailurePreservesEveryFieldOfTheError()
+    {
+        var source = new TimeoutException("底層逾時");
+        var error = Error.FromException(source, "http.timeout", ErrorCategory.Timeout) with
+        {
+            Data = new Dictionary<string, string> { ["retryAfterMs"] = "500" },
+        };
+        var result = Result.Failure(error);
+
+        var forwarded = result.ToFailure<string>();
+
+        Assert.AreEqual(error.Code, forwarded.Error!.Code);
+        Assert.AreEqual(error.Message, forwarded.Error.Message);
+        Assert.AreEqual(error.Category, forwarded.Error.Category);
+        Assert.AreSame(error.Exception, forwarded.Error.Exception);
+        Assert.AreSame(error.Data, forwarded.Error.Data);
+    }
+
+    [TestMethod]
+    public void ToFailureThrowsInvalidOperationExceptionOnSuccess()
+    {
+        var success = Result.Success();
+
+        Assert.ThrowsExactly<InvalidOperationException>(() => { _ = success.ToFailure<int>(); });
+    }
+
+    [TestMethod]
+    public void ToFailureOnDefaultValueForwardsUninitializedError()
+    {
+        Result uninitialized = default;
+
+        var forwarded = uninitialized.ToFailure<int>();
+
+        Assert.IsTrue(forwarded.IsFailure);
+        Assert.AreEqual(Error.Uninitialized, forwarded.Error);
+    }
 }

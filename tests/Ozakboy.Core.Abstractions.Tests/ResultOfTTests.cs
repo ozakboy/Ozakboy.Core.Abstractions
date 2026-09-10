@@ -476,6 +476,56 @@ public sealed class ResultOfTTests
     }
 
     [TestMethod]
+    public void ToFailureForwardsTheSameErrorInstanceToAnotherValueType()
+    {
+        var error = Error.NotFound("symbol.missing", "找不到商品");
+        var result = Result.Failure<decimal>(error);
+
+        var forwarded = result.ToFailure<string>();
+
+        Assert.IsTrue(forwarded.IsFailure);
+        Assert.AreSame(error, forwarded.Error);
+    }
+
+    [TestMethod]
+    public void ToFailurePreservesEveryFieldOfTheError()
+    {
+        var source = new TimeoutException("底層逾時");
+        var error = Error.FromException(source, "http.timeout", ErrorCategory.Timeout) with
+        {
+            Data = new Dictionary<string, string> { ["retryAfterMs"] = "500" },
+        };
+        var result = Result.Failure<int>(error);
+
+        var forwarded = result.ToFailure<string>();
+
+        Assert.AreEqual(error.Code, forwarded.Error!.Code);
+        Assert.AreEqual(error.Message, forwarded.Error.Message);
+        Assert.AreEqual(error.Category, forwarded.Error.Category);
+        Assert.AreSame(error.Exception, forwarded.Error.Exception);
+        Assert.AreSame(error.Data, forwarded.Error.Data);
+    }
+
+    [TestMethod]
+    public void ToFailureThrowsInvalidOperationExceptionOnSuccess()
+    {
+        var success = Result.Success(42);
+
+        Assert.ThrowsExactly<InvalidOperationException>(() => { _ = success.ToFailure<string>(); });
+    }
+
+    [TestMethod]
+    public void ToFailureOnDefaultValueForwardsUninitializedError()
+    {
+        Result<int> uninitialized = default;
+
+        var forwarded = uninitialized.ToFailure<string>();
+
+        Assert.IsTrue(forwarded.IsFailure);
+        Assert.AreEqual(Error.Uninitialized, forwarded.Error);
+    }
+
+    [TestMethod]
     public void ChainedPipelineStopsAtTheFirstFailure()
     {
         // 串接情境的整合驗證:第一個失敗之後的每一步都不應該被執行。

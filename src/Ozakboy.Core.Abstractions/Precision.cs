@@ -129,6 +129,87 @@ public static class Precision
     }
 
     /// <summary>
+    /// 嘗試將數值向下對齊到步進值的整數倍,步進值不合法時回傳 <see langword="false"/> 而不擲出例外。
+    /// Tries to align a value down to a multiple of the step, returning <see langword="false"/> instead of throwing
+    /// when the step is invalid.
+    /// </summary>
+    /// <param name="value">要對齊的數值。The value to align.</param>
+    /// <param name="step">步進值。The step.</param>
+    /// <param name="result">
+    /// 成功時輸出對齊後的數值,失敗時為零。
+    /// Receives the aligned value on success; zero on failure.
+    /// </param>
+    /// <returns>
+    /// 步進值合法且對齊成功時回傳 <see langword="true"/>。
+    /// <see langword="true"/> when the step is valid and alignment succeeded.
+    /// </returns>
+    /// <remarks>
+    /// 給「步進值來自外部資料因此可能不合法」的呼叫端使用 —— 交易規則是交易所回傳的,
+    /// 不該假設它一定正確。呼叫端若本來就要把結果包成失敗值回傳,用這個版本比先自己檢查再呼叫更直接。
+    /// For callers whose step comes from external data and may therefore be invalid: exchange rules arrive over the
+    /// wire and should not be assumed correct. If the caller is going to wrap the outcome in a failure value anyway,
+    /// this is simpler than checking the step separately before calling.
+    /// </remarks>
+    public static bool TryFloorToStep(decimal value, decimal step, out decimal result)
+    {
+        if (step <= 0m)
+        {
+            result = 0m;
+            return false;
+        }
+
+        result = FloorToStep(value, step);
+        return true;
+    }
+
+    /// <summary>
+    /// 嘗試將數值向上對齊到步進值的整數倍,步進值不合法時回傳 <see langword="false"/> 而不擲出例外。
+    /// Tries to align a value up to a multiple of the step, returning <see langword="false"/> instead of throwing
+    /// when the step is invalid.
+    /// </summary>
+    /// <param name="value">要對齊的數值。The value to align.</param>
+    /// <param name="step">步進值。The step.</param>
+    /// <param name="result">成功時輸出對齊後的數值,失敗時為零。Receives the aligned value on success; zero on failure.</param>
+    /// <returns>步進值合法時回傳 <see langword="true"/>。<see langword="true"/> when the step is valid.</returns>
+    public static bool TryCeilingToStep(decimal value, decimal step, out decimal result)
+    {
+        if (step <= 0m)
+        {
+            result = 0m;
+            return false;
+        }
+
+        result = CeilingToStep(value, step);
+        return true;
+    }
+
+    /// <summary>
+    /// 嘗試將數值四捨五入對齊到步進值的整數倍,步進值不合法時回傳 <see langword="false"/> 而不擲出例外。
+    /// Tries to align a value to the nearest multiple of the step, returning <see langword="false"/> instead of
+    /// throwing when the step is invalid.
+    /// </summary>
+    /// <param name="value">要對齊的數值。The value to align.</param>
+    /// <param name="step">步進值。The step.</param>
+    /// <param name="result">成功時輸出對齊後的數值,失敗時為零。Receives the aligned value on success; zero on failure.</param>
+    /// <param name="mode">中點的處理方式。How midpoints are handled.</param>
+    /// <returns>步進值合法時回傳 <see langword="true"/>。<see langword="true"/> when the step is valid.</returns>
+    public static bool TryRoundToStep(
+        decimal value,
+        decimal step,
+        out decimal result,
+        MidpointRounding mode = MidpointRounding.ToEven)
+    {
+        if (step <= 0m)
+        {
+            result = 0m;
+            return false;
+        }
+
+        result = RoundToStep(value, step, mode);
+        return true;
+    }
+
+    /// <summary>
     /// 判斷數值是否已經是步進值的整數倍。
     /// Determines whether a value is already an exact multiple of the step.
     /// </summary>

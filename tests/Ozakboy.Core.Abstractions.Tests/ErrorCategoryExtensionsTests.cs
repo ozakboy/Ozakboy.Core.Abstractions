@@ -52,6 +52,7 @@ public sealed class ErrorCategoryExtensionsTests
         var unavailable = ToInt(ErrorCategory.Unavailable);
         var cancelled = ToInt(ErrorCategory.Cancelled);
         var internalCategory = ToInt(ErrorCategory.Internal);
+        var notSupported = ToInt(ErrorCategory.NotSupported);
 
         Assert.AreEqual(0, unexpected);
         Assert.AreEqual(1, validation);
@@ -65,6 +66,14 @@ public sealed class ErrorCategoryExtensionsTests
         Assert.AreEqual(9, unavailable);
         Assert.AreEqual(10, cancelled);
         Assert.AreEqual(11, internalCategory);
+        Assert.AreEqual(12, notSupported);
+    }
+
+    [TestMethod]
+    public void IsTransientIsFalseForNotSupported()
+    {
+        // NotSupported 代表這個實作做不到,不是暫時性狀況,重試沒有意義。
+        Assert.IsFalse(ErrorCategory.NotSupported.IsTransient());
     }
 
     [TestMethod]

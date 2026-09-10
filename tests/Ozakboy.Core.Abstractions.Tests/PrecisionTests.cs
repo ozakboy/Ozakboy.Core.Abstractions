@@ -141,6 +141,35 @@ public sealed class PrecisionTests
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => { _ = Precision.FloorToStep(1m, -0.01m); });
     }
 
+    // ---------- TryFloorToStep ----------
+
+    [TestMethod]
+    public void TryFloorToStepMatchesFloorToStepWhenStepIsValid()
+    {
+        // 步進值合法時,Try 版本的結果必須與擲出例外版本完全一致。多組值交叉比對。
+        foreach (var step in Steps)
+        {
+            foreach (var value in Samples)
+            {
+                var succeeded = Precision.TryFloorToStep(value, step, out var tryResult);
+                var expected = Precision.FloorToStep(value, step);
+
+                Assert.IsTrue(succeeded, $"TryFloorToStep({value}, {step}) 應該成功");
+                Assert.AreEqual(expected, tryResult, $"TryFloorToStep({value}, {step}) 與 FloorToStep 結果不一致");
+            }
+        }
+    }
+
+    [TestMethod]
+    public void TryFloorToStepReturnsFalseAndZeroWhenStepIsNotPositive()
+    {
+        Assert.IsFalse(Precision.TryFloorToStep(1m, 0m, out var resultForZero));
+        Assert.AreEqual(0m, resultForZero);
+
+        Assert.IsFalse(Precision.TryFloorToStep(1m, -0.01m, out var resultForNegative));
+        Assert.AreEqual(0m, resultForNegative);
+    }
+
     // ---------- CeilingToStep ----------
 
     [TestMethod]
@@ -227,6 +256,34 @@ public sealed class PrecisionTests
     {
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => { _ = Precision.CeilingToStep(1m, 0m); });
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => { _ = Precision.CeilingToStep(1m, -1m); });
+    }
+
+    // ---------- TryCeilingToStep ----------
+
+    [TestMethod]
+    public void TryCeilingToStepMatchesCeilingToStepWhenStepIsValid()
+    {
+        foreach (var step in Steps)
+        {
+            foreach (var value in Samples)
+            {
+                var succeeded = Precision.TryCeilingToStep(value, step, out var tryResult);
+                var expected = Precision.CeilingToStep(value, step);
+
+                Assert.IsTrue(succeeded, $"TryCeilingToStep({value}, {step}) 應該成功");
+                Assert.AreEqual(expected, tryResult, $"TryCeilingToStep({value}, {step}) 與 CeilingToStep 結果不一致");
+            }
+        }
+    }
+
+    [TestMethod]
+    public void TryCeilingToStepReturnsFalseAndZeroWhenStepIsNotPositive()
+    {
+        Assert.IsFalse(Precision.TryCeilingToStep(1m, 0m, out var resultForZero));
+        Assert.AreEqual(0m, resultForZero);
+
+        Assert.IsFalse(Precision.TryCeilingToStep(1m, -1m, out var resultForNegative));
+        Assert.AreEqual(0m, resultForNegative);
     }
 
     // ---------- 屬性式測試 ----------
@@ -363,6 +420,57 @@ public sealed class PrecisionTests
     {
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => { _ = Precision.RoundToStep(1m, 0m); });
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => { _ = Precision.RoundToStep(1m, -1m); });
+    }
+
+    // ---------- TryRoundToStep ----------
+
+    [TestMethod]
+    public void TryRoundToStepMatchesRoundToStepWhenStepIsValid()
+    {
+        foreach (var step in Steps)
+        {
+            foreach (var value in Samples)
+            {
+                var succeeded = Precision.TryRoundToStep(value, step, out var tryResult);
+                var expected = Precision.RoundToStep(value, step);
+
+                Assert.IsTrue(succeeded, $"TryRoundToStep({value}, {step}) 應該成功");
+                Assert.AreEqual(expected, tryResult, $"TryRoundToStep({value}, {step}) 與 RoundToStep 結果不一致");
+            }
+        }
+    }
+
+    [TestMethod]
+    public void TryRoundToStepHonoursBankersRoundingByDefault()
+    {
+        Assert.IsTrue(Precision.TryRoundToStep(1.005m, 0.01m, out var roundedDown));
+        Assert.AreEqual(1.00m, roundedDown);
+
+        Assert.IsTrue(Precision.TryRoundToStep(1.015m, 0.01m, out var roundedUp));
+        Assert.AreEqual(1.02m, roundedUp);
+    }
+
+    [TestMethod]
+    public void TryRoundToStepHonoursExplicitMidpointRoundingMode()
+    {
+        Assert.IsTrue(Precision.TryRoundToStep(1.005m, 0.01m, out var toEven, MidpointRounding.ToEven));
+        Assert.AreEqual(1.00m, toEven);
+
+        Assert.IsTrue(Precision.TryRoundToStep(1.005m, 0.01m, out var awayFromZero, MidpointRounding.AwayFromZero));
+        Assert.AreEqual(1.01m, awayFromZero);
+
+        Assert.IsTrue(Precision.TryRoundToStep(-1.005m, 0.01m, out var negativeAwayFromZero, MidpointRounding.AwayFromZero));
+        Assert.AreEqual(-1.01m, negativeAwayFromZero);
+    }
+
+    [TestMethod]
+    public void TryRoundToStepReturnsFalseAndZeroWhenStepIsNotPositive()
+    {
+        Assert.IsFalse(Precision.TryRoundToStep(1m, 0m, out var resultForZero));
+        Assert.AreEqual(0m, resultForZero);
+
+        Assert.IsFalse(Precision.TryRoundToStep(1m, -1m, out var resultForNegative, MidpointRounding.AwayFromZero));
+        Assert.AreEqual(0m, resultForNegative);
     }
 
     // ---------- IsAlignedToStep ----------

@@ -77,6 +77,20 @@ public enum ErrorCategory
     /// An internal defect such as a broken invariant. Retrying will not help; log it and fix the code.
     /// </summary>
     Internal = 11,
+
+    /// <summary>
+    /// 這個實作不支援該操作。與 <see cref="Validation"/> 的差別在於:輸入沒有問題,是這個實作做不到。
+    /// The operation is not supported by this implementation. Unlike <see cref="Validation"/>, the input is fine —
+    /// this particular implementation simply cannot do it.
+    /// </summary>
+    /// <remarks>
+    /// 典型情境是同一個介面有多個實作而能力不對等,例如回測用的模擬交易所無法變更保證金模式。
+    /// 這不是缺陷也不是暫時性失敗,呼叫端通常應該改走別條路而不是重試。
+    /// The typical case is an interface with implementations of unequal capability — a simulated exchange used for
+    /// backtesting cannot change margin mode, for instance. This is neither a defect nor a transient failure, and
+    /// callers should normally take a different path rather than retry.
+    /// </remarks>
+    NotSupported = 12,
 }
 
 /// <summary>
