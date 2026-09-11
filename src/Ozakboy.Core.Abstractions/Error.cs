@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace Ozakboy.Core.Abstractions;
 
 /// <summary>
@@ -173,6 +175,20 @@ public sealed record Error
     public static Error Internal(string code, string message) => new(code, message, ErrorCategory.Internal);
 
     /// <summary>
+    /// 建立「重試機會已用盡」的終局錯誤(非暫時性)。
+    /// Creates a terminal "attempts exhausted" failure, which is not transient.
+    /// </summary>
+    /// <param name="code">錯誤代碼。The error code.</param>
+    /// <param name="message">錯誤訊息。The error message.</param>
+    /// <returns>分類為 <see cref="ErrorCategory.Exhausted"/> 的錯誤。An error categorised as <see cref="ErrorCategory.Exhausted"/>.</returns>
+    /// <remarks>
+    /// 用於重連或重試次數用盡:操作原本可行,但這個物件的生命週期已經結束,呼叫端要換一個新的而不是重試。
+    /// For a spent reconnect or retry budget: the operation used to work, but this object's lifetime is over and the
+    /// caller must obtain a fresh one rather than retry.
+    /// </remarks>
+    public static Error Exhausted(string code, string message) => new(code, message, ErrorCategory.Exhausted);
+
+    /// <summary>
     /// 由例外建立錯誤,並保留原始例外供診斷。
     /// Creates an error from an exception, keeping the original for diagnostics.
     /// </summary>
@@ -210,6 +226,213 @@ public sealed record Error
     }
 
     /// <summary>
+    /// 把這個錯誤包成可以跨越例外邊界的 <see cref="ResultException"/>。
+    /// Wraps this error in a <see cref="ResultException"/> so it can cross an exception boundary.
+    /// </summary>
+    /// <returns>攜帶這個錯誤的例外。An exception carrying this error.</returns>
+    /// <remarks>
+    /// 給「簽章固定、<see cref="Result"/> 過不去」的地方使用,例如實作 <c>DelegatingHandler.SendAsync</c>。
+    /// 寫成 <c>throw error.ToException();</c> 比 <c>throw new ResultException(error);</c> 短,而且讀起來像是
+    /// 錯誤本身換了個載具,不是憑空生出一個例外。
+    /// For places where the signature is fixed and a <see cref="Result"/> cannot pass, such as an implementation of
+    /// <c>DelegatingHandler.SendAsync</c>. Writing <c>throw error.ToException();</c> is shorter than
+    /// <c>throw new ResultException(error);</c> and reads as the error changing vehicle rather than a new exception
+    /// appearing from nowhere.
+    /// </remarks>
+    public ResultException ToException() => new(this);
+
+    /// <summary>
+    /// 回傳附加了一筆 <see cref="Data"/> 的新錯誤,原錯誤不變。
+    /// Returns a new error with one <see cref="Data"/> entry added; this instance is unchanged.
+    /// </summary>
+    /// <param name="key">資料鍵。不可為空白。The data key; must not be blank.</param>
+    /// <param name="value">資料值。The data value.</param>
+    /// <returns>附加資料後的新錯誤。A new error carrying the added entry.</returns>
+    /// <remarks>
+    /// <para>
+    /// 沒有這組方法時,要附上「statusCode 加 body」得先建一個 <see cref="Dictionary{TKey, TValue}"/> 再
+    /// <c>with</c> 進去,三行才寫得完一件小事;有了之後就是
+    /// <c>error.WithData("statusCode", 429).WithData("retryAfterMs", 1500)</c>。
+    /// Without these, attaching a status code and a body means building a <see cref="Dictionary{TKey, TValue}"/> and
+    /// then <c>with</c>-ing it in — three lines for a small thing. With them it reads as
+    /// <c>error.WithData("statusCode", 429).WithData("retryAfterMs", 1500)</c>.
+    /// </para>
+    /// <para>
+    /// 同一個鍵重複附加時以最後一次為準。<see cref="Data"/> 不參與相等性比較,所以附加資料不會改變
+    /// 這個錯誤與其他錯誤的相等關係。
+    /// Adding the same key twice keeps the last value. <see cref="Data"/> takes no part in equality, so adding data
+    /// never changes how this error compares with another.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="key"/> 為空白時擲出。
+    /// Thrown when <paramref name="key"/> is blank.
+    /// </exception>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="key"/> 或 <paramref name="value"/> 為 <see langword="null"/> 時擲出。
+    /// Thrown when <paramref name="key"/> or <paramref name="value"/> is <see langword="null"/>.
+    /// </exception>
+    public Error WithData(string key, string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentNullException.ThrowIfNull(value);
+
+        var merged = CopyData();
+        merged[key] = value;
+
+        return this with { Data = merged };
+    }
+
+    /// <summary>
+    /// 回傳附加了一筆十進位數值的新錯誤。以 <see cref="Precision.ToPlainString"/> 序列化。
+    /// Returns a new error with a decimal entry added, serialised through <see cref="Precision.ToPlainString"/>.
+    /// </summary>
+    /// <param name="key">資料鍵。The data key.</param>
+    /// <param name="value">資料值。The value.</param>
+    /// <returns>附加資料後的新錯誤。A new error carrying the added entry.</returns>
+    /// <remarks>
+    /// 值仍然存成字串,因為 <see cref="Data"/> 要能整份序列化進日誌與資料庫;但寫入與讀取兩端都提供型別化的
+    /// 方法,呼叫端就不必自己記得 <see cref="CultureInfo.InvariantCulture"/>,也不會在某個 locale 下才爆。
+    /// 走 <see cref="Precision.ToPlainString"/> 而不是 <c>ToString</c>,是為了避免小數值寫成 <c>1E-05</c>。
+    /// The value is still stored as text because <see cref="Data"/> must serialise wholesale into logs and databases;
+    /// but typed methods on both sides mean the caller never has to remember
+    /// <see cref="CultureInfo.InvariantCulture"/> and never discovers the omission in a different locale. It goes
+    /// through <see cref="Precision.ToPlainString"/> rather than <c>ToString</c> so small values do not become
+    /// <c>1E-05</c>.
+    /// </remarks>
+    public Error WithData(string key, decimal value) => WithData(key, Precision.ToPlainString(value));
+
+    /// <summary>
+    /// 回傳附加了一筆整數的新錯誤。以 <see cref="CultureInfo.InvariantCulture"/> 序列化。
+    /// Returns a new error with an integer entry added, serialised with <see cref="CultureInfo.InvariantCulture"/>.
+    /// </summary>
+    /// <param name="key">資料鍵。The data key.</param>
+    /// <param name="value">資料值。The value.</param>
+    /// <returns>附加資料後的新錯誤。A new error carrying the added entry.</returns>
+    public Error WithData(string key, long value) => WithData(key, value.ToString(CultureInfo.InvariantCulture));
+
+    /// <summary>
+    /// 回傳附加了一筆布林值的新錯誤。序列化為小寫的 <c>true</c> 或 <c>false</c>。
+    /// Returns a new error with a boolean entry added, serialised as lowercase <c>true</c> or <c>false</c>.
+    /// </summary>
+    /// <param name="key">資料鍵。The data key.</param>
+    /// <param name="value">資料值。The value.</param>
+    /// <returns>附加資料後的新錯誤。A new error carrying the added entry.</returns>
+    /// <remarks>
+    /// 刻意用小寫而不是 <c>bool.ToString()</c> 的 <c>True</c>/<c>False</c>:<see cref="Data"/> 常常直接落進
+    /// JSON 日誌,小寫才是那裡的慣例。讀回來的 <see cref="TryGetBoolean"/> 不分大小寫,兩種寫法都吃得下。
+    /// Lowercase on purpose rather than the <c>True</c>/<c>False</c> that <c>bool.ToString()</c> produces:
+    /// <see cref="Data"/> often lands straight in a JSON log, where lowercase is the convention.
+    /// <see cref="TryGetBoolean"/> is case-insensitive and reads either form back.
+    /// </remarks>
+    public Error WithData(string key, bool value) => WithData(key, value ? "true" : "false");
+
+    /// <summary>
+    /// 回傳附加了多筆 <see cref="Data"/> 的新錯誤。
+    /// Returns a new error with several <see cref="Data"/> entries added.
+    /// </summary>
+    /// <param name="entries">要附加的資料。The entries to add.</param>
+    /// <returns>附加資料後的新錯誤。A new error carrying the added entries.</returns>
+    /// <remarks>
+    /// 重複的鍵以列舉順序中最後一筆為準。
+    /// A repeated key keeps the last value in enumeration order.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="entries"/> 為 <see langword="null"/>,或其中任一筆的鍵或值為 <see langword="null"/> 時擲出。
+    /// Thrown when <paramref name="entries"/> is <see langword="null"/>, or any key or value within it is.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// 任一筆的鍵為空白時擲出。
+    /// Thrown when any key within it is blank.
+    /// </exception>
+    public Error WithData(IEnumerable<KeyValuePair<string, string>> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+
+        var merged = CopyData();
+        foreach (var entry in entries)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(entry.Key, nameof(entries));
+            ArgumentNullException.ThrowIfNull(entry.Value, nameof(entries));
+
+            merged[entry.Key] = entry.Value;
+        }
+
+        return this with { Data = merged };
+    }
+
+    /// <summary>
+    /// 讀取一筆 <see cref="Data"/>。
+    /// Reads one <see cref="Data"/> entry.
+    /// </summary>
+    /// <param name="key">資料鍵。The data key.</param>
+    /// <param name="value">
+    /// 找到時輸出資料值,否則為 <see langword="null"/>。
+    /// Receives the value when found; otherwise <see langword="null"/>.
+    /// </param>
+    /// <returns>找到時回傳 <see langword="true"/>。<see langword="true"/> when the key was found.</returns>
+    /// <remarks>
+    /// 與 <see cref="WithData(string, string)"/> 不同,這裡對不合法的鍵回傳 <see langword="false"/> 而不擲出
+    /// 例外 —— 與 <see cref="Precision.TryFloorToStep"/> 的取捨相同:寫入端的錯誤鍵是缺陷,讀取端則常常是
+    /// 「這筆資料本來就可能不存在」。
+    /// Unlike <see cref="WithData(string, string)"/>, an invalid key returns <see langword="false"/> here instead of
+    /// throwing — the same trade-off as <see cref="Precision.TryFloorToStep"/>: a bad key on the writing side is a
+    /// defect, while on the reading side "this entry may simply not be there" is the normal case.
+    /// </remarks>
+    public bool TryGetData(string key, out string? value)
+    {
+        if (Data is null || string.IsNullOrWhiteSpace(key))
+        {
+            value = null;
+            return false;
+        }
+
+        return Data.TryGetValue(key, out value);
+    }
+
+    /// <summary>
+    /// 讀取一筆 <see cref="Data"/> 並解析為十進位數值,一律使用 <see cref="CultureInfo.InvariantCulture"/>。
+    /// Reads one <see cref="Data"/> entry and parses it as a decimal, always with
+    /// <see cref="CultureInfo.InvariantCulture"/>.
+    /// </summary>
+    /// <param name="key">資料鍵。The data key.</param>
+    /// <param name="value">解析成功時輸出數值,否則為零。Receives the value on success; zero otherwise.</param>
+    /// <returns>找到且解析成功時回傳 <see langword="true"/>。<see langword="true"/> when found and parsed.</returns>
+    public bool TryGetDecimal(string key, out decimal value)
+    {
+        value = 0m;
+        return TryGetData(key, out var text) && Precision.TryParsePlain(text, out value);
+    }
+
+    /// <summary>
+    /// 讀取一筆 <see cref="Data"/> 並解析為 64 位元整數,一律使用 <see cref="CultureInfo.InvariantCulture"/>。
+    /// Reads one <see cref="Data"/> entry and parses it as a 64-bit integer, always with
+    /// <see cref="CultureInfo.InvariantCulture"/>.
+    /// </summary>
+    /// <param name="key">資料鍵。The data key.</param>
+    /// <param name="value">解析成功時輸出數值,否則為零。Receives the value on success; zero otherwise.</param>
+    /// <returns>找到且解析成功時回傳 <see langword="true"/>。<see langword="true"/> when found and parsed.</returns>
+    public bool TryGetInt64(string key, out long value)
+    {
+        value = 0L;
+        return TryGetData(key, out var text)
+            && long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
+    }
+
+    /// <summary>
+    /// 讀取一筆 <see cref="Data"/> 並解析為布林值,不分大小寫。
+    /// Reads one <see cref="Data"/> entry and parses it as a boolean, case-insensitively.
+    /// </summary>
+    /// <param name="key">資料鍵。The data key.</param>
+    /// <param name="value">解析成功時輸出數值,否則為 <see langword="false"/>。Receives the value on success; otherwise <see langword="false"/>.</param>
+    /// <returns>找到且解析成功時回傳 <see langword="true"/>。<see langword="true"/> when found and parsed.</returns>
+    public bool TryGetBoolean(string key, out bool value)
+    {
+        value = false;
+        return TryGetData(key, out var text) && bool.TryParse(text, out value);
+    }
+
+    /// <summary>
     /// 比較兩個錯誤是否相同。僅比較 <see cref="Code"/>、<see cref="Message"/> 與 <see cref="Category"/>;
     /// <see cref="Exception"/> 不列入比較,因為例外實例沒有值語義,兩個內容相同的例外並不相等。
     /// Compares two errors by <see cref="Code"/>, <see cref="Message"/>, and <see cref="Category"/> only.
@@ -236,4 +459,21 @@ public sealed record Error
     /// </summary>
     /// <returns>可讀的錯誤敘述。A readable description of the error.</returns>
     public override string ToString() => $"{Code}: {Message}";
+
+    /// <summary>
+    /// 複製目前的 <see cref="Data"/> 成一份可寫入的字典,供增補方法使用。
+    /// Copies the current <see cref="Data"/> into a writable dictionary for the augmenting methods.
+    /// </summary>
+    /// <returns>可寫入的副本;原本沒有資料時為空字典。A writable copy; empty when there was no data.</returns>
+    /// <remarks>
+    /// 一律複製而不是就地改寫。<see cref="Error"/> 是不可變的值,而且同一份 <see cref="Data"/> 可能被
+    /// <see cref="Result{T}.ToFailure{TOut}"/> 之類的方法沿用到別的錯誤上,就地改寫會波及那些實例。
+    /// Always copies rather than mutating in place. <see cref="Error"/> is an immutable value, and the same
+    /// <see cref="Data"/> instance may have been carried onto another error by something like
+    /// <see cref="Result{T}.ToFailure{TOut}"/>; mutating it would reach those instances too.
+    /// </remarks>
+    private Dictionary<string, string> CopyData() =>
+        Data is null
+            ? new Dictionary<string, string>(StringComparer.Ordinal)
+            : new Dictionary<string, string>(Data, StringComparer.Ordinal);
 }

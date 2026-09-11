@@ -53,6 +53,7 @@ public sealed class ErrorCategoryExtensionsTests
         var cancelled = ToInt(ErrorCategory.Cancelled);
         var internalCategory = ToInt(ErrorCategory.Internal);
         var notSupported = ToInt(ErrorCategory.NotSupported);
+        var exhausted = ToInt(ErrorCategory.Exhausted);
 
         Assert.AreEqual(0, unexpected);
         Assert.AreEqual(1, validation);
@@ -67,6 +68,7 @@ public sealed class ErrorCategoryExtensionsTests
         Assert.AreEqual(10, cancelled);
         Assert.AreEqual(11, internalCategory);
         Assert.AreEqual(12, notSupported);
+        Assert.AreEqual(13, exhausted);
     }
 
     [TestMethod]
@@ -74,6 +76,15 @@ public sealed class ErrorCategoryExtensionsTests
     {
         // NotSupported 代表這個實作做不到,不是暫時性狀況,重試沒有意義。
         Assert.IsFalse(ErrorCategory.NotSupported.IsTransient());
+    }
+
+    [TestMethod]
+    public void IsTransientIsFalseForExhausted()
+    {
+        // Exhausted 代表重試機會已用盡。它語意上最接近 Unavailable,而 Unavailable 是暫時性的 ——
+        // 這條測試就是在鎖死「不可以因為像就歸為可重試」。
+        Assert.IsFalse(ErrorCategory.Exhausted.IsTransient());
+        Assert.IsTrue(ErrorCategory.Unavailable.IsTransient());
     }
 
     [TestMethod]

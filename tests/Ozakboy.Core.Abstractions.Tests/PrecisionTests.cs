@@ -618,4 +618,203 @@ public sealed class PrecisionTests
         Assert.AreEqual("1234.5", Precision.ToPlainString(1234.5000m));
         Assert.IsFalse(Precision.ToPlainString(1234.5m).Contains(',', StringComparison.Ordinal));
     }
+
+    // ---------- TryParsePlain ----------
+
+    [TestMethod]
+    public void TryParsePlainReadsPlainNotation()
+    {
+        Assert.IsTrue(Precision.TryParsePlain("1.23", out var simple));
+        Assert.AreEqual(1.23m, simple);
+
+        Assert.IsTrue(Precision.TryParsePlain("0", out var zero));
+        Assert.AreEqual(0m, zero);
+
+        Assert.IsTrue(Precision.TryParsePlain("0.00000001", out var tiny));
+        Assert.AreEqual(0.00000001m, tiny);
+
+        Assert.IsTrue(Precision.TryParsePlain("79228162514264337593543950335", out var max));
+        Assert.AreEqual(decimal.MaxValue, max);
+    }
+
+    [TestMethod]
+    public void TryParsePlainReadsNegativeValues()
+    {
+        Assert.IsTrue(Precision.TryParsePlain("-1.23", out var negative));
+        Assert.AreEqual(-1.23m, negative);
+
+        Assert.IsTrue(Precision.TryParsePlain("+1.23", out var explicitlyPositive));
+        Assert.AreEqual(1.23m, explicitlyPositive);
+
+        Assert.IsTrue(Precision.TryParsePlain("-79228162514264337593543950335", out var min));
+        Assert.AreEqual(decimal.MinValue, min);
+    }
+
+    [TestMethod]
+    public void TryParsePlainToleratesSurroundingWhitespace()
+    {
+        // 前後空白不會改變數值,所以容忍;會改變讀法的東西才拒絕。
+        Assert.IsTrue(Precision.TryParsePlain("  1.23  ", out var value));
+        Assert.AreEqual(1.23m, value);
+    }
+
+    [TestMethod]
+    public void TryParsePlainRejectsExponentNotation()
+    {
+        // 刻意的:ToPlainString 存在的目的就是絕不產生科學記號,收到它代表上游序列化設定有問題。
+        Assert.IsFalse(Precision.TryParsePlain("1E-05", out var lower));
+        Assert.AreEqual(0m, lower);
+
+        Assert.IsFalse(Precision.TryParsePlain("1e5", out var upper));
+        Assert.AreEqual(0m, upper);
+    }
+
+    [TestMethod]
+    public void TryParsePlainRejectsGroupSeparatorsAndCurrencySymbols()
+    {
+        Assert.IsFalse(Precision.TryParsePlain("1,234.5", out _));
+        Assert.IsFalse(Precision.TryParsePlain("$1.23", out _));
+        Assert.IsFalse(Precision.TryParsePlain("(1.23)", out _));
+    }
+
+    [TestMethod]
+    public void TryParsePlainRejectsCommaAsDecimalSeparator()
+    {
+        // InvariantCulture 固定用小數點。若這裡改成跟著執行緒文化,在 de-DE 底下 "1,23" 會被讀成 1.23,
+        // 那正是這組方法要防的事。
+        Assert.IsFalse(Precision.TryParsePlain("1,23", out _));
+    }
+
+    [TestMethod]
+    public void TryParsePlainRejectsNullEmptyAndNonNumericText()
+    {
+        Assert.IsFalse(Precision.TryParsePlain(null, out var fromNull));
+        Assert.AreEqual(0m, fromNull);
+
+        Assert.IsFalse(Precision.TryParsePlain(string.Empty, out _));
+        Assert.IsFalse(Precision.TryParsePlain("   ", out _));
+        Assert.IsFalse(Precision.TryParsePlain("abc", out _));
+        Assert.IsFalse(Precision.TryParsePlain("1.2.3", out _));
+    }
+
+    [TestMethod]
+    public void TryParsePlainRejectsValuesOutsideDecimalRange()
+    {
+        Assert.IsFalse(Precision.TryParsePlain("79228162514264337593543950336", out _));
+    }
+
+    // ---------- ParsePlain ----------
+
+    [TestMethod]
+    public void ParsePlainReturnsTheValueOnSuccess()
+    {
+        var result = Precision.ParsePlain("-1.23");
+
+        Assert.IsTrue(result.IsSuccess);
+        Assert.AreEqual(-1.23m, result.GetValueOrDefault(0m));
+    }
+
+    [TestMethod]
+    public void ParsePlainReturnsValidationFailureOnBadInput()
+    {
+        var result = Precision.ParsePlain("1E-05");
+
+        Assert.IsTrue(result.IsFailure);
+        Assert.AreEqual(ErrorCategory.Validation, result.Error!.Category);
+        Assert.AreEqual("core.decimal_parse_failed", result.Error.Code);
+        Assert.IsFalse(result.Error.IsTransient);
+    }
+
+    [TestMethod]
+    public void ParsePlainPutsTheOffendingTextInTheMessage()
+    {
+        var result = Precision.ParsePlain("1,234.5");
+
+        Assert.IsTrue(result.Error!.Message.Contains("1,234.5", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void ParsePlainHandlesNullWithoutThrowing()
+    {
+        var result = Precision.ParsePlain(null);
+
+        Assert.IsTrue(result.IsFailure);
+        Assert.AreEqual(ErrorCategory.Validation, result.Error!.Category);
+    }
+
+    [TestMethod]
+    public void ParsePlainAgreesWithTryParsePlainAcrossRepresentativeInputs()
+    {
+        string?[] inputs = [null, string.Empty, "  ", "0", "1.23", "-1.23", "+1.23", " 1.23 ", "1E-05", "1,234.5", "abc"];
+
+        foreach (var input in inputs)
+        {
+            var expected = Precision.TryParsePlain(input, out var expectedValue);
+            var result = Precision.ParsePlain(input);
+
+            Assert.AreEqual(expected, result.IsSuccess, $"輸入「{input}」的成敗判定不一致");
+
+            if (expected)
+            {
+                Assert.AreEqual(expectedValue, result.GetValueOrDefault(decimal.MinValue), $"輸入「{input}」的數值不一致");
+            }
+        }
+    }
+
+    // ---------- ToPlainString 與 TryParsePlain 的往返 ----------
+
+    [TestMethod]
+    public void ToPlainStringRoundTripsThroughTryParsePlainForRepresentativeValues()
+    {
+        decimal[] values =
+        [
+            .. Samples,
+            decimal.MaxValue,
+            decimal.MinValue,
+            0.0000000000000000000000000001m,
+            1.2300m,
+            -0.0000000000000000000000000001m,
+        ];
+
+        foreach (var value in values)
+        {
+            var text = Precision.ToPlainString(value);
+
+            Assert.IsTrue(Precision.TryParsePlain(text, out var parsed), $"ToPlainString({value}) = {text} 無法解析回來");
+            Assert.AreEqual(value, parsed, $"ToPlainString({value}) = {text} 往返後變成 {parsed}");
+        }
+    }
+
+    [TestMethod]
+    public void ToPlainStringRoundTripsThroughTryParsePlainForRandomInputs()
+    {
+        // 固定種子,失敗可重現。比照本檔其他屬性式測試的作法。
+        var random = new Random(20260915);
+
+        for (var i = 0; i < 20_000; i++)
+        {
+            var value = NextValue(random);
+
+            var text = Precision.ToPlainString(value);
+
+            Assert.IsTrue(Precision.TryParsePlain(text, out var parsed), $"第 {i} 輪:{text} 無法解析回來");
+            Assert.AreEqual(value, parsed, $"第 {i} 輪:{value} 往返後變成 {parsed}");
+        }
+    }
+
+    [TestMethod]
+    public void ParsePlainRoundTripsThroughToPlainStringForRandomInputs()
+    {
+        var random = new Random(20260916);
+
+        for (var i = 0; i < 20_000; i++)
+        {
+            var value = NextValue(random);
+
+            var result = Precision.ParsePlain(Precision.ToPlainString(value));
+
+            Assert.IsTrue(result.IsSuccess, $"第 {i} 輪:{value} 的往返解析失敗");
+            Assert.AreEqual(value, result.GetValueOrDefault(decimal.MinValue), $"第 {i} 輪:{value} 往返後不相等");
+        }
+    }
 }

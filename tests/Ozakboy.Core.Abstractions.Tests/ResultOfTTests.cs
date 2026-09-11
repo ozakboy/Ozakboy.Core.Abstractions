@@ -340,10 +340,12 @@ public sealed class ResultOfTTests
     [TestMethod]
     public void GetValueOrThrowThrowsInvalidOperationExceptionOnFailure()
     {
+        // 擲出的型別自 0.3.0 起是 ResultException(仍然衍生自 InvalidOperationException),
+        // 因此這裡用 ThrowsExactly 就必須指名衍生型別。訊息與內層例外的契約不變。
         var error = Error.Validation("qty.too_small", "數量太小");
         var result = Result.Failure<int>(error);
 
-        var thrown = Assert.ThrowsExactly<InvalidOperationException>(() => { _ = result.GetValueOrThrow(); });
+        var thrown = Assert.ThrowsExactly<ResultException>(() => { _ = result.GetValueOrThrow(); });
 
         Assert.AreEqual(error.ToString(), thrown.Message);
         Assert.IsNull(thrown.InnerException);
@@ -355,9 +357,48 @@ public sealed class ResultOfTTests
         var source = new TimeoutException("底層逾時");
         var result = Result.Failure<int>(Error.FromException(source, "http.timeout", ErrorCategory.Timeout));
 
-        var thrown = Assert.ThrowsExactly<InvalidOperationException>(() => { _ = result.GetValueOrThrow(); });
+        var thrown = Assert.ThrowsExactly<ResultException>(() => { _ = result.GetValueOrThrow(); });
 
         Assert.AreSame(source, thrown.InnerException);
+    }
+
+    [TestMethod]
+    public void GetValueOrThrowCarriesTheErrorOnTheException()
+    {
+        var error = Error.NotFound("symbol.missing", "找不到商品");
+        var result = Result.Failure<int>(error);
+
+        var thrown = Assert.ThrowsExactly<ResultException>(() => { _ = result.GetValueOrThrow(); });
+
+        Assert.AreSame(error, thrown.Error);
+    }
+
+    [TestMethod]
+    public void GetValueOrThrowIsStillCatchableAsInvalidOperationException()
+    {
+        // 相容性保證:0.2.1 之前擲的是 InvalidOperationException,既有呼叫端不能因為升版而漏接。
+        var caught = false;
+
+        try
+        {
+            _ = Result.Failure<int>(Error.Validation("qty.too_small", "數量太小")).GetValueOrThrow();
+        }
+        catch (InvalidOperationException)
+        {
+            caught = true;
+        }
+
+        Assert.IsTrue(caught, "既有的 catch (InvalidOperationException) 必須仍然攔得到");
+    }
+
+    [TestMethod]
+    public void GetValueOrThrowOnDefaultValueReportsTheUninitializedError()
+    {
+        Result<int> uninitialized = default;
+
+        var thrown = Assert.ThrowsExactly<ResultException>(() => { _ = uninitialized.GetValueOrThrow(); });
+
+        Assert.AreEqual(Error.Uninitialized, thrown.Error);
     }
 
     [TestMethod]

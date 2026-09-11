@@ -41,6 +41,19 @@ public static class Precision
     private const decimal TrailingZeroStripper = 1.000000000000000000000000000000m;
 
     /// <summary>
+    /// <see cref="TryParsePlain"/> 與 <see cref="ParsePlain"/> 接受的數字格式:正負號、小數點,以及前後空白。
+    /// 前後空白不會改變數值所以容忍;科學記號與千分位分隔符會改變讀法,因此不接受。
+    /// The number formats accepted by <see cref="TryParsePlain"/> and <see cref="ParsePlain"/>: a sign, a decimal
+    /// point, and surrounding whitespace. Whitespace cannot change the value so it is tolerated; exponents and group
+    /// separators can change how a value reads, so they are not.
+    /// </summary>
+    private const NumberStyles PlainNumberStyles =
+        NumberStyles.AllowLeadingWhite
+        | NumberStyles.AllowTrailingWhite
+        | NumberStyles.AllowLeadingSign
+        | NumberStyles.AllowDecimalPoint;
+
+    /// <summary>
     /// 將數值向下對齊到步進值的整數倍(往負無窮方向)。
     /// Aligns a value down to a multiple of the step, rounding towards negative infinity.
     /// </summary>
@@ -307,6 +320,87 @@ public static class Precision
     /// </remarks>
     public static string ToPlainString(decimal value) =>
         Normalize(value).ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// 嘗試把字串解析回十進位數值,一律使用 <see cref="CultureInfo.InvariantCulture"/>。
+    /// Tries to parse a string back into a decimal, always using <see cref="CultureInfo.InvariantCulture"/>.
+    /// </summary>
+    /// <param name="text">要解析的字串。The text to parse.</param>
+    /// <param name="value">
+    /// 解析成功時輸出數值,失敗時為零。
+    /// Receives the value on success; zero on failure.
+    /// </param>
+    /// <returns>
+    /// 解析成功時回傳 <see langword="true"/>。
+    /// <see langword="true"/> when the text parsed successfully.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// <b>與 <see cref="ToPlainString"/> 的往返保證:</b><c>TryParsePlain(ToPlainString(x), out var y)</c> 一定
+    /// 成功,且 <c>y == x</c>。<see cref="ToPlainString"/> 會去除尾隨零,所以 <c>y</c> 的有效位數可能比
+    /// <c>x</c> 少,但兩者在數值上相等(<see cref="decimal"/> 的相等性本來就不看尾隨零)。
+    /// <b>Round-trip guarantee with <see cref="ToPlainString"/>:</b> <c>TryParsePlain(ToPlainString(x), out var y)</c>
+    /// always succeeds and yields <c>y == x</c>. <see cref="ToPlainString"/> strips trailing zeros, so <c>y</c> may
+    /// carry a smaller scale than <c>x</c>, but the two are numerically equal — <see cref="decimal"/> equality
+    /// ignores trailing zeros.
+    /// </para>
+    /// <para>
+    /// 這個方法存在的理由是 <see cref="CultureInfo.InvariantCulture"/> 很容易被漏掉。在 zh-TW 環境下小數點
+    /// 仍然是 <c>.</c>,漏掉了不會當場出錯,會等到跑在別的 locale 上才爆 —— 那時症狀離原因已經很遠。
+    /// This exists because <see cref="CultureInfo.InvariantCulture"/> is so easy to forget. Under zh-TW the decimal
+    /// separator is still <c>.</c>, so omitting it fails silently and only breaks under a different locale, by which
+    /// time the symptom is a long way from the cause.
+    /// </para>
+    /// <para>
+    /// <b>刻意只接受固定小數表示法</b>:正負號、小數點與前後空白,不接受科學記號,也不接受千分位分隔符。
+    /// 理由是這個方法是 <see cref="ToPlainString"/> 的反向操作,而後者存在的目的就是「絕不產生科學記號」;
+    /// 收到 <c>1E-05</c> 代表上游的序列化設定有問題,容忍它等於把同一個問題留到某個我們控制不到的路徑
+    /// (例如簽章用的請求本文)再爆。回傳 <see langword="false"/> 是可回復的:真的需要容忍的呼叫端仍然可以
+    /// 自行呼叫 <c>decimal.Parse</c> 並指定 <see cref="NumberStyles.Float"/>,但那會是一個看得見的決定。
+    /// <b>Only plain decimal notation is accepted</b>: a sign, a decimal point, and surrounding whitespace. Exponent
+    /// notation and thousands separators are rejected. This method is the inverse of <see cref="ToPlainString"/>,
+    /// whose whole purpose is to never emit an exponent; receiving <c>1E-05</c> means the upstream serialiser is
+    /// misconfigured, and absorbing it quietly leaves the same problem to surface somewhere we do not control, such
+    /// as a signed request body. Returning <see langword="false"/> is recoverable: a caller that genuinely needs
+    /// tolerance can still call <c>decimal.Parse</c> with <see cref="NumberStyles.Float"/> — but that will be a
+    /// visible decision rather than an accident.
+    /// </para>
+    /// </remarks>
+    public static bool TryParsePlain(string? text, out decimal value) =>
+        decimal.TryParse(text, PlainNumberStyles, CultureInfo.InvariantCulture, out value);
+
+    /// <summary>
+    /// 把字串解析回十進位數值,失敗時回傳 <see cref="ErrorCategory.Validation"/> 分類的失敗結果。
+    /// Parses a string back into a decimal, returning an <see cref="ErrorCategory.Validation"/> failure when it
+    /// cannot.
+    /// </summary>
+    /// <param name="text">要解析的字串。The text to parse.</param>
+    /// <returns>
+    /// 解析後的數值,或描述失敗的結果。
+    /// The parsed value, or a result describing the failure.
+    /// </returns>
+    /// <remarks>
+    /// 接受的格式與 <see cref="TryParsePlain"/> 完全相同。這個版本給「解析失敗要往上傳而不是就地處理」的
+    /// 呼叫端用 —— 失敗的字串會出現在錯誤訊息裡,不必再回頭找是哪一筆資料壞掉。
+    /// Accepts exactly the same formats as <see cref="TryParsePlain"/>. This version is for callers that propagate a
+    /// parse failure rather than handling it on the spot: the offending text appears in the message, so nobody has to
+    /// go back and work out which field was malformed.
+    /// </remarks>
+    public static Result<decimal> ParsePlain(string? text)
+    {
+        if (TryParsePlain(text, out var value))
+        {
+            return value;
+        }
+
+        return Error.Validation(
+            "core.decimal_parse_failed",
+            "無法解析為十進位數值(只接受不含科學記號與千分位的固定小數表示):「"
+            + (text ?? "<null>")
+            + "」。Could not parse as a decimal; only plain notation without exponents or group separators is accepted: \""
+            + (text ?? "<null>")
+            + "\".");
+    }
 
     /// <summary>
     /// 把對齊運算的結果收斂到指定小數位數,消除除法帶來的尾端誤差。

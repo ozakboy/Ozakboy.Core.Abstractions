@@ -117,6 +117,41 @@ public sealed record RetryPolicy
     } = 0.2d;
 
     /// <summary>
+    /// 自訂的重試判斷。設定時<b>完全取代</b> <see cref="Error.IsTransient"/> 的判斷。
+    /// A custom retry predicate. When set it <b>entirely replaces</b> the <see cref="Error.IsTransient"/> check.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 語意刻意是「取代」而不是 AND 或 OR:呼叫端要嘛用內建的暫時性判斷,要嘛完全自己決定。混合語意
+    /// (例如「暫時性且通過自訂判斷」)會讓「為什麼這個錯誤沒被重試」變成得同時翻兩處才答得出來的問題。
+    /// The semantics are deliberately replacement rather than AND or OR: either the caller takes the built-in
+    /// transience rule, or the caller decides entirely. A mixed rule — "transient *and* accepted by the predicate" —
+    /// turns "why was this error not retried" into a question that needs two places checked to answer.
+    /// </para>
+    /// <para>
+    /// 動機來自 HTTP:同樣是 429,帶著 <c>Retry-After</c> 的值得重試,而「IP 被封」的那種不值得。沒有這個
+    /// 屬性時,這類判斷只能寫在 handler 裡,於是策略物件就不再是重試決策的唯一真相來源。
+    /// The motivating case is HTTP: one 429 carries a <c>Retry-After</c> and is worth retrying, another means the IP
+    /// is banned and is not. Without this, that judgement has to live in the handler, and the policy object stops
+    /// being the single source of truth for the retry decision.
+    /// </para>
+    /// <para>
+    /// 次數上限 <see cref="MaxAttempts"/> 不受這個委派影響,仍然一律套用 —— 自訂判斷負責「這個錯誤值不值得
+    /// 重試」,不負責「還能不能再試」。
+    /// <see cref="MaxAttempts"/> is not affected by this delegate and still always applies: the predicate decides
+    /// whether an error is worth retrying, not whether any attempts remain.
+    /// </para>
+    /// <para>
+    /// 這個屬性<b>不參與相等性比較</b>。理由與 <see cref="Error.Exception"/> 相同:委派沒有值語義,兩個內容
+    /// 完全相同的 lambda 並不相等,列入比較會讓兩份設定相同的策略被判定為不同。
+    /// This property <b>takes no part in equality</b>, for the same reason as <see cref="Error.Exception"/>:
+    /// delegates have no value semantics, two identical lambdas are not equal, and including it would make two
+    /// policies with identical settings compare as different.
+    /// </para>
+    /// </remarks>
+    public Func<Error, bool>? RetryPredicate { get; init; }
+
+    /// <summary>
     /// 不重試。適用於任何非冪等的操作,特別是送出委託。
     /// Never retry. Use for any non-idempotent operation, above all order placement.
     /// </summary>
@@ -228,9 +263,15 @@ public sealed record RetryPolicy
     /// The failure that occurred.
     /// </param>
     /// <returns>
-    /// 還有剩餘次數且失敗屬於暫時性時回傳 <see langword="true"/>。
-    /// <see langword="true"/> when attempts remain and the failure is transient.
+    /// 還有剩餘次數,且失敗通過重試判斷時回傳 <see langword="true"/>。
+    /// <see langword="true"/> when attempts remain and the failure passes the retry check.
     /// </returns>
+    /// <remarks>
+    /// 重試判斷預設是 <see cref="Error.IsTransient"/>;設定了 <see cref="RetryPredicate"/> 時改用它,而且是
+    /// 完全取代,不是額外加條件。
+    /// The retry check defaults to <see cref="Error.IsTransient"/>. When <see cref="RetryPredicate"/> is set it is
+    /// used instead — replacing the default outright, not adding a condition to it.
+    /// </remarks>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="error"/> 為 <see langword="null"/> 時擲出。
     /// Thrown when <paramref name="error"/> is <see langword="null"/>.
@@ -239,6 +280,37 @@ public sealed record RetryPolicy
     {
         ArgumentNullException.ThrowIfNull(error);
 
-        return attempt < MaxAttempts && error.IsTransient;
+        return attempt < MaxAttempts && (RetryPredicate?.Invoke(error) ?? error.IsTransient);
     }
+
+    /// <summary>
+    /// 比較兩份策略是否相同。比較所有設定值,但<b>排除</b> <see cref="RetryPredicate"/>。
+    /// Compares two policies by every setting <b>except</b> <see cref="RetryPredicate"/>.
+    /// </summary>
+    /// <param name="other">要比較的另一份策略。The other policy to compare with.</param>
+    /// <returns>相同時回傳 <see langword="true"/>。<see langword="true"/> when they are equivalent.</returns>
+    /// <remarks>
+    /// record 預設會把每個屬性都列入比較,但 <see cref="Func{T, TResult}"/> 沒有值語義:兩個程式碼一模一樣的
+    /// lambda 是兩個不同的委派實例,永遠不相等。若不排除,<c>policy with { MaxAttempts = 3 }</c> 這種只想確認
+    /// 「設定沒變」的比較就會無故失敗。作法與 <see cref="Error"/> 排除 <see cref="Error.Exception"/> 一致。
+    /// A record compares every property by default, but <see cref="Func{T, TResult}"/> has no value semantics: two
+    /// lambdas with identical source are two different delegate instances and never compare equal. Without the
+    /// exclusion, a check as ordinary as "are these settings still the same" would fail for no visible reason. This
+    /// mirrors how <see cref="Error"/> excludes <see cref="Error.Exception"/>.
+    /// </remarks>
+    public bool Equals(RetryPolicy? other) =>
+        other is not null
+        && MaxAttempts == other.MaxAttempts
+        && BaseDelay == other.BaseDelay
+        && MaxDelay == other.MaxDelay
+        && Strategy == other.Strategy
+        && JitterRatio.Equals(other.JitterRatio);
+
+    /// <summary>
+    /// 取得雜湊碼,與 <see cref="Equals(RetryPolicy?)"/> 的比較欄位一致。
+    /// Returns a hash code consistent with the fields compared by <see cref="Equals(RetryPolicy?)"/>.
+    /// </summary>
+    /// <returns>雜湊碼。The hash code.</returns>
+    public override int GetHashCode() =>
+        HashCode.Combine(MaxAttempts, BaseDelay, MaxDelay, Strategy, JitterRatio);
 }

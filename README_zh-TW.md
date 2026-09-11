@@ -74,6 +74,45 @@ var report = LoadAccount(id)
 
 真正的程式缺陷仍然應該丟例外,`Result` 不是拿來取代例外的。
 
+### 非同步串接
+
+上面那些組合子只吃同步委派,所以一旦有某一步是非同步的,串接就斷了。`*Async` 這組擴充方法同時接受 `Task<Result<T>>` 當接收者與非同步委派當後續,串接就接得下去:
+
+```csharp
+var name = await LoadAccountAsync(id)
+    .EnsureAsync(a => a.IsActive, Error.Conflict("account.inactive", "帳戶已停用"))
+    .ThenAsync(FetchProfileAsync)     // Func<Account, Task<Result<Profile>>>
+    .MapAsync(p => p.DisplayName)
+    .MatchAsync(n => n, e => e.Code);
+```
+
+失敗一樣會短路:第一個失敗之後的委派不會被呼叫。內部每個 `await` 都加了 `ConfigureAwait(false)`。
+
+### 跨越例外邊界
+
+有些簽章塞不進 `Result` —— `DelegatingHandler.SendAsync` 必須回傳 `Task<HttpResponseMessage>`,`BackgroundService.ExecuteAsync` 必須回傳 `Task`。那些地方統一用 `ResultException` 當載具:
+
+```csharp
+protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+{
+    var result = await _pipeline.SendAsync(request, ct);
+
+    return result.TryGetValue(out var response)
+        ? response
+        : throw result.Error.ToException();
+}
+```
+
+```csharp
+catch (ResultException ex)
+{
+    logger.LogWarning("{Code}: {Message}", ex.Error.Code, ex.Error.Message);
+    if (ex.Error.IsTransient) { /* ... */ }
+}
+```
+
+它衍生自 `InvalidOperationException`,而那正是 `ThrowIfFailure()` 與 `GetValueOrThrow()` 擲出的型別 —— 既有的 `catch (InvalidOperationException)` 照常運作,只有想取回 `Error` 的那段程式需要改。
+
 ---
 
 ## Money:讓幣別變成型別的一部分
@@ -128,6 +167,14 @@ Precision.ToPlainString(0.00000001m);  // "0.00000001",不會變成 1E-08
 
 送出科學記號或多餘的零,對方通常回一個完全看不出原因的參數錯誤,查起來很花時間。
 
+`TryParsePlain` 與 `ParsePlain` 是它的反向操作,保證往返一致,而且一律走 `InvariantCulture` —— 那正是最容易漏掉、又只會在別的 locale 才爆的那一段:
+
+```csharp
+Precision.TryParsePlain("0.00000001", out var qty);   // true
+Precision.TryParsePlain("1E-08", out _);              // false,刻意不接受
+Precision.ParsePlain("nope");                          // 失敗的 Result<decimal>,分類是 Validation
+```
+
 ---
 
 ## RetryPolicy:只描述策略,不跑迴圈
@@ -156,7 +203,18 @@ for (var attempt = 1; attempt <= policy.MaxAttempts; attempt++)
 
 它不執行重試、不碰 I/O,所以同一份策略可以套在任何傳輸層上,間隔計算也能脫離時間獨立測試 —— `GetDelay(attempt, jitterSample)` 讓你傳入固定的抖動取樣值,結果完全確定。
 
-只有暫時性的錯誤(`Timeout`、`Network`、`RateLimited`、`Unavailable`)才會被 `ShouldRetry` 判定為值得重試。
+只有暫時性的錯誤(`Timeout`、`Network`、`RateLimited`、`Unavailable`)才會被 `ShouldRetry` 判定為值得重試。`ErrorCategory.Exhausted` 刻意不在其中:它代表原本做得到、但重試或重連的機會已經用盡,呼叫端該換一個新的物件而不是再試一次。
+
+當「暫時性」不是對的判準時 —— 同樣是 429,帶著 `Retry-After` 的值得重試,IP 被封的那種不值得 —— 設 `RetryPredicate`。它是**完全取代** `IsTransient` 判斷,不是額外加條件,所以「為什麼這個錯誤沒被重試」永遠只需要翻一個地方:
+
+```csharp
+var policy = RetryPolicy.Default with
+{
+    RetryPredicate = e => e.TryGetInt64("retryAfterMs", out var ms) && ms < 5000,
+};
+```
+
+`MaxAttempts` 仍然一律套用。`RetryPredicate` 不參與相等性比較,因為兩個內容相同的 lambda 永遠不相等,列入比較會讓兩份設定相同的策略被判定為不同。
 
 **非冪等的操作不要重試。** 逾時不代表對方沒收到,盲目重送會產生重複的副作用。那種情況請用 `RetryPolicy.NoRetry`,改以冪等識別碼加事後查詢來確認結果。
 

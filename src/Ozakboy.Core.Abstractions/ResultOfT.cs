@@ -240,25 +240,42 @@ public readonly struct Result<T> : IEquatable<Result<T>>
     }
 
     /// <summary>
-    /// 失敗時擲出 <see cref="InvalidOperationException"/>,成功時回傳值。
-    /// Throws an <see cref="InvalidOperationException"/> on failure; returns the value on success.
+    /// 失敗時擲出 <see cref="ResultException"/>,成功時回傳值。
+    /// Throws a <see cref="ResultException"/> on failure; returns the value on success.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// 只在「失敗代表程式缺陷」的地方使用。一般的執行期失敗請用 <see cref="TryGetValue"/> 或
     /// <see cref="Match{TOut}"/> 處理,不要靠例外走控制流。
     /// Use this only where a failure would indicate a defect. Handle ordinary runtime failures with
     /// <see cref="TryGetValue"/> or <see cref="Match{TOut}"/> rather than through exceptions.
+    /// </para>
+    /// <para>
+    /// <see cref="ResultException"/> 衍生自 <see cref="InvalidOperationException"/>(先前擲出的型別),
+    /// 因此既有的 <c>catch (InvalidOperationException)</c> 照常運作;想取回 <see cref="Abstractions.Error"/>
+    /// 的呼叫端改攔 <see cref="ResultException"/> 即可。
+    /// <see cref="ResultException"/> derives from <see cref="InvalidOperationException"/>, the type thrown before,
+    /// so existing <c>catch (InvalidOperationException)</c> handlers keep working; callers that want the
+    /// <see cref="Abstractions.Error"/> back catch <see cref="ResultException"/> instead.
+    /// </para>
     /// </remarks>
     /// <returns>成功時的回傳值。The value produced on success.</returns>
-    /// <exception cref="InvalidOperationException">
-    /// 結果為失敗時擲出。
-    /// Thrown when the result represents a failure.
+    /// <exception cref="ResultException">
+    /// 結果為失敗時擲出,並攜帶原本的 <see cref="Abstractions.Error"/>。
+    /// Thrown when the result represents a failure, carrying the original <see cref="Abstractions.Error"/>.
     /// </exception>
+    // CA1024:分析器建議把 GetValueOrThrow 改成屬性。這裡刻意保留方法形式 —— 本型別的設計就是「不提供
+    // 會擲出例外的取值屬性」(見型別層級的說明),讓呼叫端不可能在沒有檢查的情況下不小心讀到值。
+    // 屬性看起來像純粹的讀取,方法才讀得出「這裡可能會擲出」。
+    // 0.2.1 之前這條規則沒有觸發,是因為當時的方法本文含有方法呼叫(Error.ToString());改擲
+    // ResultException 之後本文只剩建構式與屬性存取,分析器就把它判定為屬性形狀了。
+#pragma warning disable CA1024
     public T GetValueOrThrow()
+#pragma warning restore CA1024
     {
         if (IsFailure)
         {
-            throw new InvalidOperationException(Error.ToString(), Error.Exception);
+            throw new ResultException(Error);
         }
 
         return _value!;

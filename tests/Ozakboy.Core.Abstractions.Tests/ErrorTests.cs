@@ -312,6 +312,321 @@ public sealed class ErrorTests
         Assert.AreEqual(withoutData.GetHashCode(), withData.GetHashCode());
     }
 
+    // ---------- Exhausted 工廠 ----------
+
+    [TestMethod]
+    public void ExhaustedFactoryProducesNonTransientExhausted()
+    {
+        var error = Error.Exhausted("ws.reconnect_exhausted", "重連次數已用盡");
+
+        Assert.AreEqual("ws.reconnect_exhausted", error.Code);
+        Assert.AreEqual("重連次數已用盡", error.Message);
+        Assert.AreEqual(ErrorCategory.Exhausted, error.Category);
+        Assert.IsFalse(error.IsTransient, "重試機會用盡的錯誤不可以被判定為暫時性");
+    }
+
+    // ---------- WithData ----------
+
+    [TestMethod]
+    public void WithDataAddsAnEntryWithoutTouchingTheOriginal()
+    {
+        var original = Error.Validation("qty.too_small", "數量太小");
+
+        var enriched = original.WithData("actual", "0.0005");
+
+        Assert.IsNull(original.Data, "原錯誤必須維持不變");
+        Assert.IsNotNull(enriched.Data);
+        Assert.AreEqual("0.0005", enriched.Data["actual"]);
+    }
+
+    [TestMethod]
+    public void WithDataKeepsEntriesAddedEarlier()
+    {
+        var error = Error.RateLimited("exchange.rate_limit", "被限流")
+            .WithData("statusCode", 429L)
+            .WithData("retryAfterMs", 1500L);
+
+        Assert.IsNotNull(error.Data);
+        Assert.AreEqual(2, error.Data.Count);
+        Assert.AreEqual("429", error.Data["statusCode"]);
+        Assert.AreEqual("1500", error.Data["retryAfterMs"]);
+    }
+
+    [TestMethod]
+    public void WithDataOverwritesTheSameKey()
+    {
+        var error = new Error("code", "message").WithData("k", "first").WithData("k", "second");
+
+        Assert.AreEqual("second", error.Data!["k"]);
+    }
+
+    [TestMethod]
+    public void WithDataDoesNotMutateADictionarySharedWithAnotherError()
+    {
+        // Data 可能被 ToFailure 之類的方法沿用到別的錯誤上,就地改寫會波及那些實例。
+        var shared = new Dictionary<string, string> { ["a"] = "1" };
+        var first = new Error("code", "message") with { Data = shared };
+
+        var second = first.WithData("b", "2");
+
+        Assert.AreEqual(1, shared.Count, "來源字典不可被改寫");
+        Assert.AreEqual(1, first.Data!.Count);
+        Assert.AreEqual(2, second.Data!.Count);
+    }
+
+    [TestMethod]
+    public void WithDataSerialisesDecimalWithoutExponentNotation()
+    {
+        var error = new Error("code", "message").WithData("price", 0.00000001m);
+
+        Assert.AreEqual("0.00000001", error.Data!["price"]);
+    }
+
+    [TestMethod]
+    public void WithDataStripsTrailingZerosOnDecimal()
+    {
+        var error = new Error("code", "message").WithData("price", 1.2300m);
+
+        Assert.AreEqual("1.23", error.Data!["price"]);
+    }
+
+    [TestMethod]
+    public void WithDataSerialisesBooleanInLowercase()
+    {
+        var error = new Error("code", "message").WithData("retryable", true).WithData("fatal", false);
+
+        Assert.AreEqual("true", error.Data!["retryable"]);
+        Assert.AreEqual("false", error.Data["fatal"]);
+    }
+
+    [TestMethod]
+    public void WithDataSerialisesNegativeAndLargeIntegers()
+    {
+        var error = new Error("code", "message")
+            .WithData("min", long.MinValue)
+            .WithData("max", long.MaxValue);
+
+        Assert.AreEqual("-9223372036854775808", error.Data!["min"]);
+        Assert.AreEqual("9223372036854775807", error.Data["max"]);
+    }
+
+    [TestMethod]
+    public void WithDataAcceptsSeveralEntriesAtOnce()
+    {
+        var error = new Error("code", "message").WithData(
+        [
+            new KeyValuePair<string, string>("a", "1"),
+            new KeyValuePair<string, string>("b", "2"),
+        ]);
+
+        Assert.AreEqual(2, error.Data!.Count);
+        Assert.AreEqual("1", error.Data["a"]);
+        Assert.AreEqual("2", error.Data["b"]);
+    }
+
+    [TestMethod]
+    public void WithDataMergesSeveralEntriesOntoExistingOnes()
+    {
+        var error = new Error("code", "message")
+            .WithData("a", "1")
+            .WithData([new KeyValuePair<string, string>("a", "overwritten"), new KeyValuePair<string, string>("b", "2")]);
+
+        Assert.AreEqual("overwritten", error.Data!["a"]);
+        Assert.AreEqual("2", error.Data["b"]);
+    }
+
+    [TestMethod]
+    public void WithDataAcceptsAnEmptySequence()
+    {
+        var error = new Error("code", "message").WithData([]);
+
+        Assert.IsNotNull(error.Data);
+        Assert.AreEqual(0, error.Data.Count);
+    }
+
+    [TestMethod]
+    public void WithDataRejectsBlankKeysAndNullValues()
+    {
+        var error = new Error("code", "message");
+
+        Assert.ThrowsExactly<ArgumentNullException>(() => { _ = error.WithData(null!, "v"); });
+        Assert.ThrowsExactly<ArgumentException>(() => { _ = error.WithData(string.Empty, "v"); });
+        Assert.ThrowsExactly<ArgumentException>(() => { _ = error.WithData("  ", "v"); });
+        Assert.ThrowsExactly<ArgumentNullException>(() => { _ = error.WithData("k", (string)null!); });
+    }
+
+    [TestMethod]
+    public void WithDataRejectsNullSequenceAndBadEntries()
+    {
+        var error = new Error("code", "message");
+
+        Assert.ThrowsExactly<ArgumentNullException>(
+            () => { _ = error.WithData((IEnumerable<KeyValuePair<string, string>>)null!); });
+        Assert.ThrowsExactly<ArgumentException>(
+            () => { _ = error.WithData([new KeyValuePair<string, string>(" ", "v")]); });
+        Assert.ThrowsExactly<ArgumentNullException>(
+            () => { _ = error.WithData([new KeyValuePair<string, string>(null!, "v")]); });
+        Assert.ThrowsExactly<ArgumentNullException>(
+            () => { _ = error.WithData([new KeyValuePair<string, string>("k", null!)]); });
+    }
+
+    [TestMethod]
+    public void WithDataDoesNotAffectEquality()
+    {
+        // Data 不參與相等性比較,所以附加資料之後仍然與原錯誤相等。
+        var original = Error.Validation("qty.too_small", "數量太小");
+
+        var enriched = original.WithData("actual", 0.0005m).WithData("minimum", 0.001m);
+
+        Assert.AreEqual(original, enriched);
+        Assert.AreEqual(original.GetHashCode(), enriched.GetHashCode());
+    }
+
+    [TestMethod]
+    public void WithDataKeepsTheCapturedException()
+    {
+        var source = new TimeoutException("底層逾時");
+        var error = Error.FromException(source, "http.timeout", ErrorCategory.Timeout);
+
+        var enriched = error.WithData("statusCode", 504L);
+
+        Assert.AreSame(source, enriched.Exception);
+        Assert.AreEqual(ErrorCategory.Timeout, enriched.Category);
+    }
+
+    // ---------- TryGetData 系列 ----------
+
+    [TestMethod]
+    public void TryGetDataReadsBackWhatWithDataWrote()
+    {
+        var error = new Error("code", "message").WithData("body", "too many requests");
+
+        Assert.IsTrue(error.TryGetData("body", out var value));
+        Assert.AreEqual("too many requests", value);
+    }
+
+    [TestMethod]
+    public void TryGetDataReturnsFalseWhenThereIsNoData()
+    {
+        var error = new Error("code", "message");
+
+        Assert.IsFalse(error.TryGetData("missing", out var value));
+        Assert.IsNull(value);
+    }
+
+    [TestMethod]
+    public void TryGetDataReturnsFalseForUnknownKey()
+    {
+        var error = new Error("code", "message").WithData("a", "1");
+
+        Assert.IsFalse(error.TryGetData("b", out var value));
+        Assert.IsNull(value);
+    }
+
+    [TestMethod]
+    public void TryGetDataReturnsFalseForBlankKeyInsteadOfThrowing()
+    {
+        // 與 Precision.TryFloorToStep 的取捨一致:讀取端的「找不到」是正常情況,不用例外表達。
+        var error = new Error("code", "message").WithData("a", "1");
+
+        Assert.IsFalse(error.TryGetData(null!, out _));
+        Assert.IsFalse(error.TryGetData(string.Empty, out _));
+        Assert.IsFalse(error.TryGetData("   ", out _));
+    }
+
+    [TestMethod]
+    public void TryGetDataIsCaseSensitive()
+    {
+        var error = new Error("code", "message").WithData("Key", "1");
+
+        Assert.IsTrue(error.TryGetData("Key", out _));
+        Assert.IsFalse(error.TryGetData("key", out _));
+    }
+
+    [TestMethod]
+    public void TryGetDecimalRoundTripsThroughWithData()
+    {
+        var error = new Error("code", "message")
+            .WithData("actual", 0.00050m)
+            .WithData("minimum", -1.5m);
+
+        Assert.IsTrue(error.TryGetDecimal("actual", out var actual));
+        Assert.AreEqual(0.0005m, actual);
+
+        Assert.IsTrue(error.TryGetDecimal("minimum", out var minimum));
+        Assert.AreEqual(-1.5m, minimum);
+    }
+
+    [TestMethod]
+    public void TryGetDecimalReturnsFalseAndZeroWhenMissingOrUnparsable()
+    {
+        var error = new Error("code", "message").WithData("text", "not a number");
+
+        Assert.IsFalse(error.TryGetDecimal("text", out var fromText));
+        Assert.AreEqual(0m, fromText);
+
+        Assert.IsFalse(error.TryGetDecimal("missing", out var fromMissing));
+        Assert.AreEqual(0m, fromMissing);
+    }
+
+    [TestMethod]
+    public void TryGetInt64RoundTripsThroughWithData()
+    {
+        var error = new Error("code", "message")
+            .WithData("statusCode", 429L)
+            .WithData("offset", -42L);
+
+        Assert.IsTrue(error.TryGetInt64("statusCode", out var statusCode));
+        Assert.AreEqual(429L, statusCode);
+
+        Assert.IsTrue(error.TryGetInt64("offset", out var offset));
+        Assert.AreEqual(-42L, offset);
+    }
+
+    [TestMethod]
+    public void TryGetInt64RejectsValuesThatAreNotWholeNumbers()
+    {
+        var error = new Error("code", "message").WithData("price", 1.5m);
+
+        Assert.IsFalse(error.TryGetInt64("price", out var value));
+        Assert.AreEqual(0L, value);
+    }
+
+    [TestMethod]
+    public void TryGetBooleanRoundTripsThroughWithData()
+    {
+        var error = new Error("code", "message").WithData("retryable", true).WithData("fatal", false);
+
+        Assert.IsTrue(error.TryGetBoolean("retryable", out var retryable));
+        Assert.IsTrue(retryable);
+
+        Assert.IsTrue(error.TryGetBoolean("fatal", out var fatal));
+        Assert.IsFalse(fatal);
+    }
+
+    [TestMethod]
+    public void TryGetBooleanAcceptsTheCapitalisedFormTooAndRejectsOthers()
+    {
+        // bool.ToString() 產生的 True/False 也讀得回來,但數字不行 —— 不猜測呼叫端的意思。
+        var error = new Error("code", "message").WithData("a", "True").WithData("b", "1");
+
+        Assert.IsTrue(error.TryGetBoolean("a", out var capitalised));
+        Assert.IsTrue(capitalised);
+
+        Assert.IsFalse(error.TryGetBoolean("b", out var numeric));
+        Assert.IsFalse(numeric);
+    }
+
+    [TestMethod]
+    public void TypedReadersReturnFalseWhenThereIsNoDataAtAll()
+    {
+        var error = new Error("code", "message");
+
+        Assert.IsFalse(error.TryGetDecimal("k", out _));
+        Assert.IsFalse(error.TryGetInt64("k", out _));
+        Assert.IsFalse(error.TryGetBoolean("k", out _));
+    }
+
     /// <summary>
     /// 測試用的例外型別,避免相依於任何實際的傳輸層例外。
     /// </summary>

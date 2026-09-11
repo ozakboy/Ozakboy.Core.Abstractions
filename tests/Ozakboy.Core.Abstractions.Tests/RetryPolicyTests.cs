@@ -476,4 +476,156 @@ public sealed class RetryPolicyTests
 
         Assert.ThrowsExactly<ArgumentNullException>(() => { _ = policy.ShouldRetry(1, null!); });
     }
+
+    [TestMethod]
+    public void ShouldRetryIsFalseForExhaustedEvenWithAttemptsRemaining()
+    {
+        // Exhausted 存在的理由就是這條:重連次數用盡不可以被當成可重試。
+        var policy = new RetryPolicy { MaxAttempts = 10 };
+
+        Assert.IsFalse(policy.ShouldRetry(1, Error.Exhausted("ws.reconnect_exhausted", "重連次數已用盡")));
+    }
+
+    // ---------- RetryPredicate ----------
+
+    [TestMethod]
+    public void RetryPredicateDefaultsToNullMeaningIsTransient()
+    {
+        var policy = new RetryPolicy();
+
+        Assert.IsNull(policy.RetryPredicate);
+        Assert.IsTrue(policy.ShouldRetry(1, Error.Timeout("http.timeout", "逾時")));
+        Assert.IsFalse(policy.ShouldRetry(1, Error.Validation("qty.too_small", "數量太小")));
+    }
+
+    [TestMethod]
+    public void RetryPredicateReplacesIsTransientEntirelyRatherThanNarrowingIt()
+    {
+        // 取代而非 AND:非暫時性的錯誤只要判斷通過就會重試。
+        var policy = new RetryPolicy
+        {
+            MaxAttempts = 10,
+            RetryPredicate = e => e.Code == "http.429_with_retry_after",
+        };
+
+        Assert.IsTrue(
+            policy.ShouldRetry(1, Error.Validation("http.429_with_retry_after", "帶 Retry-After 的限流")),
+            "自訂判斷通過時,即使分類不是暫時性也要重試");
+    }
+
+    [TestMethod]
+    public void RetryPredicateCanRefuseAnErrorThatIsTransientByCategory()
+    {
+        // 反方向也一樣:判斷不通過就不重試,不會因為分類是暫時性而被救回來。
+        var policy = new RetryPolicy
+        {
+            MaxAttempts = 10,
+            RetryPredicate = _ => false,
+        };
+
+        Assert.IsFalse(policy.ShouldRetry(1, Error.Timeout("http.timeout", "逾時")));
+        Assert.IsFalse(policy.ShouldRetry(1, Error.Network("net.down", "斷線")));
+    }
+
+    [TestMethod]
+    public void RetryPredicateReceivesTheActualError()
+    {
+        Error? seen = null;
+        var policy = new RetryPolicy
+        {
+            MaxAttempts = 10,
+            RetryPredicate = e =>
+            {
+                seen = e;
+                return true;
+            },
+        };
+        var error = Error.RateLimited("exchange.rate_limit", "被限流");
+
+        _ = policy.ShouldRetry(1, error);
+
+        Assert.AreSame(error, seen);
+    }
+
+    [TestMethod]
+    public void RetryPredicateDoesNotOverrideMaxAttempts()
+    {
+        // 自訂判斷負責「這個錯誤值不值得重試」,不負責「還能不能再試」。
+        var predicateRan = false;
+        var policy = new RetryPolicy
+        {
+            MaxAttempts = 2,
+            RetryPredicate = _ =>
+            {
+                predicateRan = true;
+                return true;
+            },
+        };
+
+        Assert.IsFalse(policy.ShouldRetry(2, Error.Timeout("http.timeout", "逾時")));
+        Assert.IsFalse(predicateRan, "次數已用盡時不必再問自訂判斷");
+    }
+
+    [TestMethod]
+    public void RetryPredicateIsExcludedFromEquality()
+    {
+        // Func<> 沒有值語義:兩個內容相同的 lambda 不相等,列入比較會讓兩份設定相同的策略被判定為不同。
+        var left = new RetryPolicy { MaxAttempts = 5, RetryPredicate = e => e.IsTransient };
+        var right = new RetryPolicy { MaxAttempts = 5, RetryPredicate = e => e.IsTransient };
+        var withoutPredicate = new RetryPolicy { MaxAttempts = 5 };
+
+        Assert.AreEqual(left, right);
+        Assert.AreEqual(left, withoutPredicate);
+        Assert.IsTrue(left == withoutPredicate);
+    }
+
+    [TestMethod]
+    public void RetryPredicateIsExcludedFromGetHashCode()
+    {
+        var withPredicate = new RetryPolicy { MaxAttempts = 5, RetryPredicate = _ => true };
+        var withoutPredicate = new RetryPolicy { MaxAttempts = 5 };
+
+        Assert.AreEqual(withoutPredicate.GetHashCode(), withPredicate.GetHashCode());
+    }
+
+    [TestMethod]
+    public void EqualityStillComparesEveryOtherSetting()
+    {
+        // 排除 RetryPredicate 不可以順手把別的設定也漏掉。
+        var baseline = new RetryPolicy
+        {
+            MaxAttempts = 5,
+            BaseDelay = TimeSpan.FromMilliseconds(100),
+            MaxDelay = TimeSpan.FromSeconds(10),
+            Strategy = BackoffStrategy.Linear,
+            JitterRatio = 0.3d,
+        };
+
+        Assert.AreNotEqual(baseline, baseline with { MaxAttempts = 6 });
+        Assert.AreNotEqual(baseline, baseline with { BaseDelay = TimeSpan.FromMilliseconds(101) });
+        Assert.AreNotEqual(baseline, baseline with { MaxDelay = TimeSpan.FromSeconds(11) });
+        Assert.AreNotEqual(baseline, baseline with { Strategy = BackoffStrategy.Fixed });
+        Assert.AreNotEqual(baseline, baseline with { JitterRatio = 0.4d });
+        Assert.AreEqual(baseline, baseline with { RetryPredicate = _ => true });
+    }
+
+    [TestMethod]
+    public void EqualsReturnsFalseForNullAndOtherTypes()
+    {
+        var policy = new RetryPolicy();
+
+        Assert.IsFalse(policy.Equals(null));
+        Assert.IsFalse(policy.Equals((object?)null));
+        Assert.IsFalse(policy.Equals("not a policy"));
+    }
+
+    [TestMethod]
+    public void WithExpressionCarriesTheRetryPredicateForward()
+    {
+        var policy = new RetryPolicy { RetryPredicate = _ => true } with { MaxAttempts = 7 };
+
+        Assert.IsNotNull(policy.RetryPredicate);
+        Assert.AreEqual(7, policy.MaxAttempts);
+        Assert.IsTrue(policy.ShouldRetry(1, Error.Validation("qty.too_small", "數量太小")));
+    }
 }

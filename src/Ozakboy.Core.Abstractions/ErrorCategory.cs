@@ -91,6 +91,35 @@ public enum ErrorCategory
     /// callers should normally take a different path rather than retry.
     /// </remarks>
     NotSupported = 12,
+
+    /// <summary>
+    /// 重試或重連的機會已經用盡,這個物件的生命週期到此為止。重試沒有意義,必須換一個新的。
+    /// The retry or reconnect budget is spent and this object's lifetime is over. Retrying is pointless; the caller
+    /// must obtain a fresh one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 與其他非暫時性分類的差別在於「曾經可行」:<see cref="Validation"/> 是輸入本身有問題,
+    /// <see cref="NotSupported"/> 是這個實作從一開始就做不到,而 <see cref="Exhausted"/> 是原本做得到、
+    /// 只是重試機會已經用完了。典型情境是 WebSocket 重連次數用盡、重試次數用盡。
+    /// What separates it from the other non-transient categories is that it once worked:
+    /// <see cref="Validation"/> means the input is wrong, <see cref="NotSupported"/> means this implementation never
+    /// could, and <see cref="Exhausted"/> means it could, but the attempts are spent. The typical cases are a
+    /// WebSocket that ran out of reconnect attempts and a retry loop that ran out of tries.
+    /// </para>
+    /// <para>
+    /// 這個分類存在的理由是 <see cref="ErrorCategoryExtensions.IsTransient"/> 必須維持「是否值得重試」的
+    /// 單一真相來源。「重連次數用盡」語意上最接近 <see cref="Unavailable"/>,但那是暫時性分類,套上去會讓
+    /// <see cref="ErrorCategoryExtensions.IsTransient"/> 對這個錯誤給出錯的答案,呼叫端只好改用錯誤代碼判斷
+    /// —— 一旦有人這樣做,這個屬性就不再可信了。
+    /// This category exists so that <see cref="ErrorCategoryExtensions.IsTransient"/> can remain the single source of
+    /// truth for "is this worth retrying". "Out of reconnect attempts" is semantically closest to
+    /// <see cref="Unavailable"/>, but that is a transient category, so reusing it would make
+    /// <see cref="ErrorCategoryExtensions.IsTransient"/> answer wrongly and push callers into branching on error
+    /// codes instead — and once anyone does that, the property has stopped being trustworthy.
+    /// </para>
+    /// </remarks>
+    Exhausted = 13,
 }
 
 /// <summary>
@@ -118,6 +147,10 @@ public static class ErrorCategoryExtensions
     /// The transient categories are <see cref="ErrorCategory.Timeout"/>, <see cref="ErrorCategory.Network"/>,
     /// <see cref="ErrorCategory.RateLimited"/>, and <see cref="ErrorCategory.Unavailable"/>. Retrying any other
     /// category cannot change the outcome and should stay out of retry loops.
+    /// 特別注意 <see cref="ErrorCategory.Exhausted"/>:它描述的是「原本可行但機會已用盡」,因此不是暫時性的,
+    /// 不可以因為它看起來像 <see cref="ErrorCategory.Unavailable"/> 就歸為可重試。
+    /// Note <see cref="ErrorCategory.Exhausted"/> in particular: it describes something that used to work but has run
+    /// out of attempts, so it is not transient, however much it may resemble <see cref="ErrorCategory.Unavailable"/>.
     /// </remarks>
     public static bool IsTransient(this ErrorCategory category) => category switch
     {

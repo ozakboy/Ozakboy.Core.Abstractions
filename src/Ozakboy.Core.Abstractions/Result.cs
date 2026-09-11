@@ -154,24 +154,34 @@ public readonly struct Result : IEquatable<Result>
     }
 
     /// <summary>
-    /// 失敗時擲出 <see cref="InvalidOperationException"/>;成功時不做任何事。
-    /// Throws an <see cref="InvalidOperationException"/> when the result is a failure; does nothing on success.
+    /// 失敗時擲出 <see cref="ResultException"/>;成功時不做任何事。
+    /// Throws a <see cref="ResultException"/> when the result is a failure; does nothing on success.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// 只在「失敗代表程式缺陷」的地方使用,例如啟動階段的不變條件檢查。一般的執行期失敗請用
     /// <see cref="IsFailure"/> 或 <see cref="Match{TOut}"/> 處理,不要靠例外走控制流。
     /// Use this only where a failure would indicate a defect, such as a start-up invariant check. Handle ordinary
     /// runtime failures with <see cref="IsFailure"/> or <see cref="Match{TOut}"/> rather than through exceptions.
+    /// </para>
+    /// <para>
+    /// <see cref="ResultException"/> 衍生自 <see cref="InvalidOperationException"/>(先前擲出的型別),
+    /// 因此既有的 <c>catch (InvalidOperationException)</c> 照常運作;想取回 <see cref="Abstractions.Error"/>
+    /// 的呼叫端改攔 <see cref="ResultException"/> 即可。
+    /// <see cref="ResultException"/> derives from <see cref="InvalidOperationException"/>, the type thrown before,
+    /// so existing <c>catch (InvalidOperationException)</c> handlers keep working; callers that want the
+    /// <see cref="Abstractions.Error"/> back catch <see cref="ResultException"/> instead.
+    /// </para>
     /// </remarks>
-    /// <exception cref="InvalidOperationException">
-    /// 結果為失敗時擲出。
-    /// Thrown when the result represents a failure.
+    /// <exception cref="ResultException">
+    /// 結果為失敗時擲出,並攜帶原本的 <see cref="Abstractions.Error"/>。
+    /// Thrown when the result represents a failure, carrying the original <see cref="Abstractions.Error"/>.
     /// </exception>
     public void ThrowIfFailure()
     {
         if (IsFailure)
         {
-            throw new InvalidOperationException(Error.ToString(), Error.Exception);
+            throw new ResultException(Error);
         }
     }
 

@@ -74,6 +74,45 @@ var report = LoadAccount(id)
 
 Genuine defects should still throw. `Result` is not a replacement for exceptions.
 
+### Async chains
+
+The combinators above take synchronous delegates, so a chain breaks the moment one step is asynchronous. The `*Async` extensions accept both a `Task<Result<T>>` receiver and asynchronous continuations, so the chain survives:
+
+```csharp
+var name = await LoadAccountAsync(id)
+    .EnsureAsync(a => a.IsActive, Error.Conflict("account.inactive", "Account is disabled"))
+    .ThenAsync(FetchProfileAsync)     // Func<Account, Task<Result<Profile>>>
+    .MapAsync(p => p.DisplayName)
+    .MatchAsync(n => n, e => e.Code);
+```
+
+Failures short-circuit here too: no delegate after the first failure is invoked. Every `await` inside uses `ConfigureAwait(false)`.
+
+### Crossing an exception boundary
+
+Some signatures leave no room for a `Result` — `DelegatingHandler.SendAsync` must return `Task<HttpResponseMessage>`, `BackgroundService.ExecuteAsync` must return `Task`. `ResultException` is the one carrier for those:
+
+```csharp
+protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+{
+    var result = await _pipeline.SendAsync(request, ct);
+
+    return result.TryGetValue(out var response)
+        ? response
+        : throw result.Error.ToException();
+}
+```
+
+```csharp
+catch (ResultException ex)
+{
+    logger.LogWarning("{Code}: {Message}", ex.Error.Code, ex.Error.Message);
+    if (ex.Error.IsTransient) { /* ... */ }
+}
+```
+
+It derives from `InvalidOperationException`, which is also what `ThrowIfFailure()` and `GetValueOrThrow()` throw — so existing `catch (InvalidOperationException)` handlers keep working, and only the code that wants the `Error` back needs to change.
+
 ---
 
 ## Money: making the currency part of the type
@@ -128,6 +167,14 @@ Precision.ToPlainString(0.00000001m);  // "0.00000001", never 1E-08
 
 Exponent notation or redundant zeros usually come back as an opaque parameter error that gives no hint of the real cause.
 
+`TryParsePlain` and `ParsePlain` are the inverse, with a guaranteed round trip — and always `InvariantCulture`, which is the part that is easy to leave out and only breaks under a different locale:
+
+```csharp
+Precision.TryParsePlain("0.00000001", out var qty);   // true
+Precision.TryParsePlain("1E-08", out _);              // false, by design
+Precision.ParsePlain("nope");                          // Result<decimal> failure, ErrorCategory.Validation
+```
+
 ---
 
 ## RetryPolicy: describes the strategy, does not run the loop
@@ -156,7 +203,18 @@ for (var attempt = 1; attempt <= policy.MaxAttempts; attempt++)
 
 It never retries anything and never touches I/O, so one policy applies across transports and the interval arithmetic stays testable without time — `GetDelay(attempt, jitterSample)` takes a fixed jitter sample and gives a fully deterministic result.
 
-Only transient categories (`Timeout`, `Network`, `RateLimited`, `Unavailable`) are considered worth retrying by `ShouldRetry`.
+Only transient categories (`Timeout`, `Network`, `RateLimited`, `Unavailable`) are considered worth retrying by `ShouldRetry`. `ErrorCategory.Exhausted` is deliberately not one of them: it means the operation used to work but the retry or reconnect budget is spent, so the caller needs a fresh object rather than another attempt.
+
+When transience is not the right test — one 429 carries a `Retry-After` and is worth retrying, another means the IP is banned — set `RetryPredicate`. It **replaces** the `IsTransient` check outright rather than adding to it, so there is only ever one place to look when asking why something was or was not retried:
+
+```csharp
+var policy = RetryPolicy.Default with
+{
+    RetryPredicate = e => e.TryGetInt64("retryAfterMs", out var ms) && ms < 5000,
+};
+```
+
+`MaxAttempts` still always applies. `RetryPredicate` is excluded from equality, because two lambdas with identical source are never equal and would make two identical policies compare as different.
 
 **Do not retry non-idempotent operations.** A timeout does not mean the request failed to arrive, and resending blindly duplicates the side effect. Use `RetryPolicy.NoRetry` there, and confirm the outcome through an idempotency key plus a follow-up query.
 

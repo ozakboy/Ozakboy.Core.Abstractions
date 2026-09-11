@@ -212,10 +212,12 @@ public sealed class ResultTests
     [TestMethod]
     public void ThrowIfFailureThrowsWithErrorTextOnFailure()
     {
+        // 擲出的型別自 0.3.0 起是 ResultException(仍然衍生自 InvalidOperationException),
+        // 因此這裡用 ThrowsExactly 就必須指名衍生型別。訊息與內層例外的契約不變。
         var error = Error.Validation("qty.too_small", "數量太小");
         var result = Result.Failure(error);
 
-        var thrown = Assert.ThrowsExactly<InvalidOperationException>(result.ThrowIfFailure);
+        var thrown = Assert.ThrowsExactly<ResultException>(result.ThrowIfFailure);
 
         Assert.AreEqual(error.ToString(), thrown.Message);
         Assert.IsNull(thrown.InnerException);
@@ -227,9 +229,37 @@ public sealed class ResultTests
         var source = new TimeoutException("底層逾時");
         var result = Result.Failure(Error.FromException(source, "http.timeout", ErrorCategory.Timeout));
 
-        var thrown = Assert.ThrowsExactly<InvalidOperationException>(result.ThrowIfFailure);
+        var thrown = Assert.ThrowsExactly<ResultException>(result.ThrowIfFailure);
 
         Assert.AreSame(source, thrown.InnerException);
+    }
+
+    [TestMethod]
+    public void ThrowIfFailureCarriesTheErrorOnTheException()
+    {
+        var error = Error.Validation("qty.too_small", "數量太小");
+
+        var thrown = Assert.ThrowsExactly<ResultException>(Result.Failure(error).ThrowIfFailure);
+
+        Assert.AreSame(error, thrown.Error);
+    }
+
+    [TestMethod]
+    public void ThrowIfFailureIsStillCatchableAsInvalidOperationException()
+    {
+        // 相容性保證:0.2.1 之前擲的是 InvalidOperationException,既有呼叫端不能因為升版而漏接。
+        var caught = false;
+
+        try
+        {
+            Result.Failure("qty.too_small", "數量太小").ThrowIfFailure();
+        }
+        catch (InvalidOperationException)
+        {
+            caught = true;
+        }
+
+        Assert.IsTrue(caught, "既有的 catch (InvalidOperationException) 必須仍然攔得到");
     }
 
     [TestMethod]
